@@ -49,7 +49,7 @@ const PROVAS_WEBHOOK_URL = process.env.PROVAS_WEBHOOK_URL || "";
 
 // ======== STATE (memória simples por número) ========
 const sessions = Object.create(null);
-// sessions[to] = { step, faturaId?, protocolo?, tipo? }
+// sessions[to] = { step, faturaId?, protocolo?, tipo?, fbScore? }
 function setStep(to, step) { sessions[to] = { ...(sessions[to]||{}), step }; }
 function getStep(to) { return sessions[to]?.step || null; }
 function clearStep(to) { delete sessions[to]; }
@@ -197,8 +197,8 @@ Ou digite:
   setStep(to, "planos_menu");
 }
 async function endChat(to) {
-  await sendText(to, "✅ Atendimento encerrado. Quando precisar, mande *menu*. Até logo!");
-  clearStep(to);
+  await sendText(to, "✅ Atendimento finalizado. Quando quiser recomeçar, envie *qualquer mensagem* que eu mostro o menu.");
+  setStep(to, "ended_wait_any");
 }
 
 // ——— Suporte Técnico ———
@@ -385,6 +385,43 @@ async function postarComprovanteWebhook(url, payload) {
   return true;
 }
 
+/* =======================
+   Handoff humano + Feedback
+   ======================= */
+
+// inicia atendimento humano (não mostrar menu; só aceitar 'encerra' ou 'não')
+async function handoff(to) {
+  setStep(to, "human_handoff");
+  await sendText(to,
+"👩‍💼 Ok! Vou transferir para um atendente humano.\nEnquanto isso, posso não responder.\n\nPara *encerrar* a conversa a qualquer momento, digite *encerra*.");
+}
+
+// inicia formulário de feedback
+async function startFeedback(to) {
+  setStep(to, "feedback_ask");
+  await sendText(to,
+"📝 *Avalie nosso atendimento*\nDe *1 a 5*, como você nos avalia?\n(1 = péssimo, 5 = excelente)");
+}
+
+async function finishFeedback(to) {
+  await sendText(to, "✅ Obrigado pelo feedback!\n*Atendimento finalizado.* Quando quiser recomeçar, envie *qualquer mensagem* e eu mostro o menu.");
+  setStep(to, "ended_wait_any");
+}
+
+async function boasVindas(to, nomeGuess) {
+  await sendText(to,
+`Olá${nomeGuess ? `, ${nomeGuess}` : ""}! 👋 Sou o assistente virtual da *${COMPANY_NAME}*.
+
+${menuPrincipal()}
+
+🕒 Horário: ${ATENDDIAS}, ${ATENDINICIO}–${ATENDFIM}.
+📍 Endereço: ${COMPANY_ADDRESS}
+💳 Pagamentos: ${PAYMENT_METHODS}
+📞 Suporte: ${SUPPORT_WHATS} | ✉️ ${SUPPORT_EMAIL}
+
+Digite *menu* a qualquer momento.`);
+}
+
 // ======== WEBHOOKS ========
 
 // Verificação do webhook (Meta) - GET
@@ -423,6 +460,61 @@ app.post("/webhook", async (req, res) => {
 
     const chamaMenu = ["oi","olá","ola","bom dia","boa tarde","boa noite","menu","iniciar","start"];
     const step = getStep(to);
+
+    /* --------- ESTADOS DE HANDOFF/FEEDBACK ---------- */
+
+    // 1) Durante o atendimento humano
+    if (step === "human_handoff") {
+      // encerra conversa manualmente
+      if (/(^|\b)(encerra|encerrar|finalizar|fim)(\b|$)/i.test(text)) {
+        await endChat(to); // finaliza e entra em ended_wait_any
+        return;
+      }
+      // se o cliente responder "não" (após a pergunta do atendente), abre feedback
+      if (text === "não" || text === "nao" || text === "n") {
+        await startFeedback(to);
+        return;
+      }
+      // caso contrário: SILÊNCIO (não mandar menu nem nada)
+      return;
+    }
+
+    // 2) Coleta da nota 1–5
+    if (step === "feedback_ask") {
+      const m = text.match(/^[1-5]$/);
+      if (!m) {
+        await sendText(to, "Por favor, responda com um número de *1 a 5* (1 = péssimo, 5 = excelente).");
+        return;
+      }
+      const nota = Number(m[0]);
+      sessions[to] = { ...(sessions[to]||{}), fbScore: nota };
+      setStep(to, "feedback_comment");
+      await sendText(to, "Obrigado! Quer deixar algum comentário? (se não quiser, responda *pular*)");
+      return;
+    }
+
+    // 3) Comentário (opcional) e finalização
+    if (step === "feedback_comment") {
+      const comentario = text;
+      if (comentario !== "pular") {
+        const nota = sessions[to]?.fbScore;
+        // Aqui você pode enviar para e-mail/planilha/CRM
+        console.log("Feedback recebido:", { to, nota, comentario });
+      } else {
+        console.log("Feedback sem comentário:", { to, nota: sessions[to]?.fbScore });
+      }
+      await finishFeedback(to);
+      return;
+    }
+
+    // 4) Após finalizado: qualquer mensagem mostra o menu de novo
+    if (step === "ended_wait_any") {
+      clearStep(to);
+      await boasVindas(to, profileName);
+      return;
+    }
+
+    /* ------------- SUBMENUS PADRÃO ------------- */
 
     // ======= PLANOS: tratar submenu =======
     if (step === "planos_menu") {
@@ -553,15 +645,15 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
         } else {
           await sendText(to, `Recebi o seu arquivo, mas *não consegui registrar automaticamente* agora.\nEnvie por e-mail: ${SUPPORT_EMAIL} ou tente novamente mais tarde.`);
         }
-        clearStep(to); return;
+        setStep(to, "financeiro_menu"); return;
       } catch (e) {
         console.error("Erro ao processar mídia:", e?.response?.data || e);
         await sendText(to, "Não consegui processar o arquivo agora. Tente novamente ou envie por e-mail.");
-        clearStep(to); return;
+        setStep(to, "financeiro_menu"); return;
       }
     }
 
-    // ======= FLUXO PADRÃO (menu principal) =======
+    /* ======= FLUXO PADRÃO (menu principal) ======= */
     if (chamaMenu.some(k => text.startsWith(k))) {
       clearStep(to); await boasVindas(to, profileName);
 
@@ -580,7 +672,7 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
       await fluxoFinanceiroIntro(to);
 
     } else if (text === "4" || text.includes("atendente") || text.includes("humano")) {
-      clearStep(to); await handoff(to);
+      await handoff(to);
 
     } else if (text === "0") {
       await endChat(to);
@@ -592,25 +684,6 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
     console.error("Erro no webhook:", e?.response?.data || e);
   }
 });
-
-// ======== BOAS-VINDAS / Handoff ========
-async function boasVindas(to, nomeGuess) {
-  await sendText(to,
-`Olá${nomeGuess ? `, ${nomeGuess}` : ""}! 👋 Sou o assistente virtual da *${COMPANY_NAME}*.
-
-${menuPrincipal()}
-
-🕒 Horário: ${ATENDDIAS}, ${ATENDINICIO}–${ATENDFIM}.
-📍 Endereço: ${COMPANY_ADDRESS}
-💳 Pagamentos: ${PAYMENT_METHODS}
-📞 Suporte: ${SUPPORT_WHATS} | ✉️ ${SUPPORT_EMAIL}
-
-Digite *menu* a qualquer momento.`);
-}
-async function handoff(to) {
-  await sendText(to, "👩‍💼 Ok! Vou transferir para um atendente humano. Aguarde um instante.");
-  // aqui você pode notificar seu time por e-mail/Slack/WhatsApp interno
-}
 
 // porta
 app.listen(process.env.PORT || 3000, () => console.log("Bot online"));

@@ -1041,5 +1041,10 @@ Para excluir seus dados, envie e-mail para rastreiaserra@outlook.com com nome, d
 Responderemos com confirmação e prazo conforme a LGPD.`
   );
 });
+// Homepage simples
+app.get("/", (req, res) => {
+  res.type("text/plain").send("RastreiaSerra Bot online");
+});
+// (já tem) healthcheck
 app.get("/health", (req, res) => res.status(200).send("ok"));
 app.listen(PORT, () => console.log(`Bot online na porta ${PORT}`));

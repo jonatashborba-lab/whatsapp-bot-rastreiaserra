@@ -1015,32 +1015,61 @@ app.post("/webhook/asaas", async (req, res) => {
     console.error("Erro /webhook/asaas:", e?.response?.data || e);
   }
 });
+// ===== Páginas de compliance (LGPD) =====
+const LAST_UPDATE = new Date().toLocaleDateString("pt-BR");
 
-/* ======================
-   SERVIDOR
-   ====================== */
-// endpoint leve só pra manter a instância acordada
-app.get("/privacidade", (req, res) => {
-  res.type("text/plain").send(
-`Política de Privacidade — Rastreia Serra
-Coletamos e tratamos dados para prestação do serviço de rastreamento e atendimento.
-Contato: rastreiaserra@outlook.com. Exercício de direitos (LGPD) via e-mail.`
-  );
-});
+// Termos de Serviço
 app.get("/termos", (req, res) => {
   res.type("text/plain").send(
-`Termos de Serviço — Rastreia Serra
-Uso implica concordância. Faturamento conforme plano; suspensão por inadimplência após aviso.
-Suporte conforme horários informados no menu.`
+`Termos de Serviço — Rastreia Serra (CNPJ 21.704.608/0001-77)
+Razão social: JONATAS HEINKE DE BORBA — Nome fantasia: RASTREIA SERRA MONITORAMENTO.
+Uso do serviço implica concordância com estes termos.
+Faturamento conforme plano contratado; suspensão por inadimplência após aviso.
+Suporte conforme horários informados no menu.
+Contato: expresso_jonas_boy@hotmail.com | (54) 8401-1516
+Endereço: Rua Maestro João Cosner, 435 — Cidade Nova — Caxias do Sul/RS — CEP 95112-160
+Política de Privacidade: /privacidade — Exclusão de dados: /exclusao-de-dados
+Última atualização: ${LAST_UPDATE}`
   );
 });
+
+// Política de Privacidade
+app.get("/privacidade", (req, res) => {
+  res.type("text/plain").send(
+`Política de Privacidade — Rastreia Serra (CNPJ 21.704.608/0001-77)
+Razão social: JONATAS HEINKE DE BORBA — Nome fantasia: RASTREIA SERRA MONITORAMENTO.
+
+Quais dados coletamos: nome/razão social, telefone/WhatsApp, mensagens trocadas para atendimento, dados de cobrança (ex.: identificador de fatura), e dados técnicos mínimos para operar o serviço.
+Base legal: execução de contrato e interesse legítimo para suporte/atendimento e faturamento.
+
+Compartilhamento: provedores essenciais à operação (Meta/WhatsApp Cloud API), cobrança (Asaas), e-mail (SMTP), e infraestrutura de hospedagem.
+
+Direitos do titular (LGPD): acesso, correção, exclusão, portabilidade e revogação de consentimento quando aplicável. Para exercer, utilize os canais abaixo.
+
+Controlador/Contato do DPO: expresso_jonas_boy@hotmail.com | (54) 8401-1516
+Endereço: Rua Maestro João Cosner, 435 — Cidade Nova — Caxias do Sul/RS — CEP 95112-160
+Exclusão de dados: /exclusao-de-dados
+Última atualização: ${LAST_UPDATE}`
+  );
+});
+
+// Instruções de exclusão de dados
 app.get("/exclusao-de-dados", (req, res) => {
   res.type("text/plain").send(
-`Exclusão de Dados — Rastreia Serra
-Para excluir seus dados, envie e-mail para rastreiaserra@outlook.com com nome, documento e telefone.
-Responderemos com confirmação e prazo conforme a LGPD.`
+`Exclusão de Dados — Rastreia Serra (CNPJ 21.704.608/0001-77)
+Para solicitar exclusão, envie um e-mail para: expresso_jonas_boy@hotmail.com
+Inclua: nome/razão social, documento (CNPJ/CPF) e telefone/WhatsApp cadastrado.
+Responderemos com confirmação e prazo de conclusão conforme a LGPD.
+Endereço: Rua Maestro João Cosner, 435 — Cidade Nova — Caxias do Sul/RS — CEP 95112-160
+Última atualização: ${LAST_UPDATE}`
   );
 });
+
+// Alguns validadores fazem HEAD — responde 200
+app.head("/termos", (req, res) => res.sendStatus(200));
+app.head("/privacidade", (req, res) => res.sendStatus(200));
+app.head("/exclusao-de-dados", (req, res) => res.sendStatus(200));
+
 // Homepage simples
 app.get("/", (req, res) => {
   res.type("text/plain").send("RastreiaSerra Bot online");

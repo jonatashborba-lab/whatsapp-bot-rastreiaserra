@@ -31,15 +31,15 @@ const asaas = ASAAS_API_KEY
 
 // === E-MAIL (opcional p/ comprovantes) ===
 const SMTP_HOST = process.env.SMTP_HOST || "";
-theSMTPPORT = Number(process.env.SMTP_PORT || "587");
+const SMTP_PORT = Number(process.env.SMTP_PORT || "587");
 const SMTP_USER = process.env.SMTP_USER || "";
 const SMTP_PASS = process.env.SMTP_PASS || "";
 const MAIL_TO   = process.env.MAIL_TO   || "financeiro@rastreiaserra.com.br"; // destino p/ comprovantes
 const mailer = (SMTP_HOST && SMTP_USER && SMTP_PASS)
   ? nodemailer.createTransport({
       host: SMTP_HOST,
-      port: theSMTPPORT,
-      secure: theSMTPPORT === 465,
+      port: SMTP_PORT,
+      secure: SMTP_PORT === 465,
       auth: { user: SMTP_USER, pass: SMTP_PASS }
     })
   : null;
@@ -61,9 +61,9 @@ function clearStep(to) { delete sessions[to]; }
 function protocolo() {
   const now = new Date();
   const n = Math.floor(Math.random() * 9000) + 1000;
-  return RS-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}-${n};
+  return `RS-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}-${n}`;
 }
-function brl(n) { return R$ ${Number(n).toFixed(2).replace('.', ',')}; }
+function brl(n) { return `R$ ${Number(n).toFixed(2).replace('.', ',')}`; }
 function dataBR(d) { return new Date(d).toLocaleDateString("pt-BR"); }
 function onlyDigits(s) { return String(s||"").replace(/\D/g, ""); }
 function extractAsaasCodeFromUrl(url) {
@@ -77,9 +77,9 @@ async function sendText(to, text) {
   to = onlyDigits(to);
   if (!to) return;
   await axios.post(
-    https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages,
+    `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
     { messaging_product: "whatsapp", to, type: "text", text: { body: text } },
-    { headers: { Authorization: Bearer ${WHATS_TOKEN} } }
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } }
   );
 }
 
@@ -109,8 +109,8 @@ async function sendTemplateCobrancaNova(to, { nome, descricao, valorBR, vencimen
       }]
     }
   };
-  await axios.post(https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages, payload,
-    { headers: { Authorization: Bearer ${WHATS_TOKEN} } });
+  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
 }
 
 // 2) Lembrete de vencimento — template: lembrete_vencimento_v1 (botão URL com sufixo {{1}})
@@ -142,8 +142,8 @@ async function sendTemplateLembreteVencimento(to, { nome, descricao, valorBR, ve
       ]
     }
   };
-  await axios.post(https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages, payload,
-    { headers: { Authorization: Bearer ${WHATS_TOKEN} } });
+  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
 }
 
 // 3) Cobrança em atraso — template: cobranca_atraso_v1 (botão URL + quick reply)
@@ -181,8 +181,8 @@ async function sendTemplateCobrancaAtraso(to, { nome, descricao, valorBR, vencim
       ]
     }
   };
-  await axios.post(https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages, payload,
-    { headers: { Authorization: Bearer ${WHATS_TOKEN} } });
+  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
 }
 
 // 4) Pagamento confirmado — template: pagamento_confirmado_v1
@@ -206,8 +206,8 @@ async function sendTemplatePagamentoConfirmado(to, { nome, descricao, valorBR, d
       }]
     }
   };
-  await axios.post(https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages, payload,
-    { headers: { Authorization: Bearer ${WHATS_TOKEN} } });
+  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
 }
 
 // (extra) Segunda via — template: segunda_via_fatura
@@ -232,8 +232,8 @@ async function sendTemplateSegundaVia(to, { nome, faturaId, vencimentoBR, valorB
       }]
     }
   };
-  await axios.post(https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages, payload,
-    { headers: { Authorization: Bearer ${WHATS_TOKEN} } });
+  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
 }
 
 /* ===========================================
@@ -242,7 +242,7 @@ async function sendTemplateSegundaVia(to, { nome, faturaId, vencimentoBR, valorB
 
 function menuPrincipal() {
   return (
-`🤖 Atendimento ${COMPANY_NAME}
+`🤖 *Atendimento ${COMPANY_NAME}*
 
 1️⃣ Planos e Preços
 2️⃣ Suporte Técnico
@@ -258,7 +258,7 @@ const FEE_ADESAO   = 100.00; // R$ por veículo
 
 function menuPlanos() {
   return (
-`Selecione o tipo de veículo:
+`*Selecione o tipo de veículo:*
 1) Carro de passeio
 2) Moto
 3) Caminhão
@@ -285,20 +285,20 @@ const TIPOS_VEICULO = {
 };
 
 async function fluxoPlanosIntro(to) {
-  await sendText(to, 📦 *Planos e Preços*\n${menuPlanos()});
+  await sendText(to, `📦 *Planos e Preços*\n${menuPlanos()}`);
   setStep(to, "planos_menu");
 }
 async function planosPedirFormulario(to, tipo) {
   sessions[to] = { ...(sessions[to]||{}), step: "planos_form", tipo };
   await sendText(to,
-`📝 ${tipo} — formulário:
-Digite em uma única mensagem:
+`📝 *${tipo}* — formulário:
+Digite em *uma única mensagem*:
 Marca: ...
 Modelo: ...
 Ano: ...
 Quantidade de veículos: ...
 
-(digite 9 para voltar ao menu principal, 10 para atendente, 0 para encerrar)`);
+(digite *9* para voltar ao menu principal, *10* para atendente, *0* para encerrar)`);
 }
 async function planosProcessarFormulario(to, rawText) {
   const tipo = sessions[to]?.tipo || "Veículo";
@@ -310,12 +310,12 @@ async function planosProcessarFormulario(to, rawText) {
     const totalMensal  = PRICE_MENSAL * qtd;
     const totalAdesao  = FEE_ADESAO   * qtd;
     msgPreco =
-`✅ Para ${qtd} ${qtd>1?'veículos':'veículo'} ${tipo}:
-* Mensalidade: ${brl(PRICE_MENSAL)} por veículo → Total: ${brl(totalMensal)}
-* Taxa de adesão: ${brl(FEE_ADESAO)} por veículo → Total: ${brl(totalAdesao)}`;
+`✅ Para *${qtd}* ${qtd>1?'veículos':'veículo'} *${tipo}*:
+• Mensalidade: *${brl(PRICE_MENSAL)} por veículo* → Total: *${brl(totalMensal)}*
+• Taxa de adesão: *${brl(FEE_ADESAO)} por veículo* → Total: *${brl(totalAdesao)}*`;
   } else {
     msgPreco =
-`ℹ️ Para frotas acima de 3 veículos, temos condições diferenciadas.
+`ℹ️ Para frotas acima de *3 veículos*, temos condições diferenciadas.
 Posso te encaminhar a um atendente para proposta personalizada.`;
   }
 
@@ -324,20 +324,20 @@ Posso te encaminhar a um atendente para proposta personalizada.`;
 
 Se desejar, envie novamente o formulário com outra quantidade.
 Ou digite:
-9 voltar ao menu principal
-10 falar com atendente
-0 encerrar`);
+*9* voltar ao menu principal
+*10* falar com atendente
+*0* encerrar`);
   setStep(to, "planos_menu");
 }
 async function endChat(to) {
-  await sendText(to, "✅ Atendimento finalizado. Quando quiser recomeçar, envie qualquer mensagem que eu mostro o menu.");
+  await sendText(to, "✅ Atendimento finalizado. Quando quiser recomeçar, envie *qualquer mensagem* que eu mostro o menu.");
   setStep(to, "ended_wait_any");
 }
 
 // ——— Suporte Técnico ———
 function menuSuporte() {
   return (
-`🛠️ Suporte Técnico
+`🛠️ *Suporte Técnico*
 
 1) Não consigo acessar o aplicativo
 2) Meu veículo está offline na plataforma
@@ -356,29 +356,29 @@ async function fluxoSuporteIntro(to) {
 }
 async function suporteAcessoApp(to) {
   await sendText(to,
-`🔐 Acesso ao aplicativo — passos rápidos
-1) Verifique se a fatura está em dia. Em atraso, o serviço pode estar bloqueado.
-2) Confira se login e senha foram digitados corretamente (maiúsculas/minúsculas).
+`🔐 *Acesso ao aplicativo — passos rápidos*
+1) Verifique se a *fatura está em dia*. Em atraso, o serviço pode estar bloqueado.
+2) Confira se *login e senha* foram digitados corretamente (maiúsculas/minúsculas).
 
-Se ainda não conseguir, digite 9 para falar com um atendente, ou 0 para encerrar.`);
+Se ainda não conseguir, digite *9* para falar com um atendente, ou *0* para encerrar.`);
 }
 async function suporteVeiculoOffline(to) {
   await sendText(to,
-`📡 Veículo offline — como verificar
-1) O veículo está com a chave/ignição desligada?
-2) Se o tempo offline for menor que 1h, pode ser apenas hibernação (após ~5min com chave desligada).
-3) Ligue a chave e aguarde alguns instantes. Se não voltar online, digite 9 para falar com atendente.
-Se o problema foi resolvido, digite 0 para encerrar.`);
+`📡 *Veículo offline — como verificar*
+1) O veículo está com a *chave/ignição desligada*?
+2) Se o tempo offline for *menor que 1h*, pode ser apenas *hibernação* (após ~5min com chave desligada).
+3) *Ligue a chave* e aguarde alguns instantes. Se não voltar online, digite *9* para falar com atendente.
+Se o problema foi resolvido, digite *0* para encerrar.`);
 }
 async function suporteEsqueciAcessoIntro(to) {
   setStep(to, "suporte_recuperacao");
   const id = protocolo();
   sessions[to] = { ...(sessions[to]||{}), protocolo: id };
   await sendText(to,
-`🧩 Recuperação de acesso
+`🧩 *Recuperação de acesso*
 Não se preocupe, vamos criar um novo acesso.
 
-Envie em uma única mensagem:
+Envie *em uma única mensagem*:
 1) Nome completo
 2) Empresa (se houver)
 3) Placa do veículo
@@ -388,8 +388,8 @@ Nome: João da Silva
 Empresa: Rastreia Serra
 Placa: ABC1D23
 
-(Atalhos: 5 voltar, 9 atendente, 0 encerrar)
-Protocolo: ${id}`);
+(Atalhos: *5* voltar, *9* atendente, *0* encerrar)
+Protocolo: *${id}*`);
 }
 async function suporteEsqueciAcessoProcessar(to, rawText) {
   const id = sessions[to]?.protocolo || protocolo();
@@ -397,27 +397,27 @@ async function suporteEsqueciAcessoProcessar(to, rawText) {
 `✅ Recebi os dados para criar novo acesso.
 ${rawText}
 
-Protocolo: ${id}
+*Protocolo:* ${id}
 Um atendente vai te auxiliar assim que possível.
 
-(Atalhos: 5 voltar ao menu anterior, 9 atendente, 0 encerrar)`);
+(Atalhos: *5* voltar ao menu anterior, *9* atendente, *0* encerrar)`);
   setStep(to, "suporte_menu");
 }
 async function suporteCancelarServico(to) {
   await sendText(to,
-`📬 Cancelamento do serviço
+`📬 *Cancelamento do serviço*
 Para solicitar o cancelamento, envie um e-mail informando o motivo para:
-✉️ ${SUPPORT_EMAIL}
+✉️ *${SUPPORT_EMAIL}*
 
 Depois de enviar o e-mail:
-* Digite 5 para retornar ao menu anterior
-* Ou 0 para encerrar`);
+• Digite *5* para retornar ao menu anterior
+• Ou *0* para encerrar`);
 }
 
 // ——— Financeiro ———
 function menuFinanceiro() {
   return (
-`💰 Financeiro ${COMPANY_NAME}
+`💰 *Financeiro ${COMPANY_NAME}*
 1️⃣ Segunda via da fatura
 2️⃣ Enviar comprovante de pagamento
 3️⃣ Negociação/atualização de boleto ou PIX (em breve)
@@ -467,7 +467,7 @@ async function createPaymentAndLink({ customerId, value, dueDate, billingType = 
   let link = p.invoiceUrl || p.bankSlipUrl || "";
   if (!link && p.billingType === "PIX") {
     try {
-      const { data } = await asaas.get(/payments/${p.id}/pixQrCode);
+      const { data } = await asaas.get(`/payments/${p.id}/pixQrCode`);
       link = data?.payload || "";
     } catch {}
   }
@@ -477,16 +477,16 @@ async function createPaymentAndLink({ customerId, value, dueDate, billingType = 
 async function iniciarSegundaVia(to) {
   if (!asaas) {
     await sendText(to,
-`📄 Segunda via da fatura
+`📄 *Segunda via da fatura*
 Integração automática indisponível (ASAAS_API_KEY não definida).
 Entre em contato: 📞 ${SUPPORT_WHATS} | ✉️ ${SUPPORT_EMAIL}`);
     clearStep(to);
     return;
   }
   await sendText(to,
-`📄 Segunda via da fatura
-Informe CPF/CNPJ ou e-mail do cadastro:
-Ex.: 000.000.000-00  ou  cliente@empresa.com`);
+`📄 *Segunda via da fatura*
+Informe *CPF/CNPJ* ou *e-mail* do cadastro:
+Ex.: 000.000.000-00  *ou*  cliente@empresa.com`);
   setStep(to, "financeiro_segundavia");
 }
 async function findCustomer({ cpfCnpj, email }) {
@@ -505,52 +505,52 @@ async function buildSecondCopyMessage(customerId) {
   const payments = await listOpenPayments(customerId);
   if (!payments.length) return "✅ Nenhuma cobrança pendente encontrada no seu cadastro.";
 
-  let out = ["📄 Faturas/2ª via encontradas:"];
+  let out = ["📄 *Faturas/2ª via encontradas:*"];
   for (const p of payments) {
     const venc = p.dueDate ? new Date(p.dueDate).toLocaleDateString("pt-BR") : "-";
     const valor = (typeof p.value === "number") ? p.value.toFixed(2).replace(".", ",") : String(p.value || "");
     let link = p.bankSlipUrl || p.invoiceUrl || "";
     if (!link && p.billingType === "PIX") {
       try {
-        const { data } = await asaas.get(/payments/${p.id}/pixQrCode);
-        link = PIX copia-e-cola:\n${data.payload};
+        const { data } = await asaas.get(`/payments/${p.id}/pixQrCode`);
+        link = `PIX copia-e-cola:\n${data.payload}`;
       } catch { link = "PIX disponível (erro ao gerar QR Code)."; }
     }
-    out.push(• #${p.id} | Venc.: ${venc} | Valor: R$ ${valor}\n${link || "Link indisponível"});
+    out.push(`• #${p.id} | Venc.: ${venc} | Valor: R$ ${valor}\n${link || "Link indisponível"}`);
   }
-  out.push("\nTambém enviamos a segunda via como mensagem estruturada. Se precisar de ajuda, responda com 4 para atendente.");
+  out.push("\nTambém enviamos a *segunda via* como mensagem estruturada. Se precisar de ajuda, responda com *4* para atendente.");
   return out.join("\n");
 }
 
 // ======== Comprovante (email/webhook) ========
 async function iniciarComprovante(to) {
   await sendText(to,
-`📎 Enviar comprovante de pagamento
-1) Me informe o ID/Nº da fatura (ex.: #RS-2025-1234)
-2) Em seguida, envie o arquivo do comprovante (imagem ou PDF).`);
+`📎 *Enviar comprovante de pagamento*
+1) Me informe o *ID/Nº da fatura* (ex.: #RS-2025-1234)
+2) Em seguida, *envie o arquivo* do comprovante (imagem ou PDF).`);
   sessions[to] = { step: "financeiro_comprovante_ask_id" };
 }
 async function confirmarFaturaId(to, rawText) {
   const faturaId = rawText.trim();
   sessions[to] = { step: "financeiro_comprovante_wait_file", faturaId };
-  await sendText(to, Perfeito! Agora *envie o arquivo* do comprovante (foto/print ou PDF) referente à fatura *${faturaId}*.);
+  await sendText(to, `Perfeito! Agora *envie o arquivo* do comprovante (foto/print ou PDF) referente à fatura *${faturaId}*.`);
 }
 async function obterUrlMidia(mediaId) {
-  const meta = await axios.get(https://graph.facebook.com/v20.0/${mediaId}, {
-    headers: { Authorization: Bearer ${WHATS_TOKEN} }
+  const meta = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, {
+    headers: { Authorization: `Bearer ${WHATS_TOKEN}` }
   });
   const url = meta.data?.url;
   if (!url) throw new Error("URL de mídia não encontrada");
   const fileResp = await axios.get(url, {
     responseType: "arraybuffer",
-    headers: { Authorization: Bearer ${WHATS_TOKEN} }
+    headers: { Authorization: `Bearer ${WHATS_TOKEN}` }
   });
   return { buffer: Buffer.from(fileResp.data), contentType: meta.data?.mime_type || "application/octet-stream" };
 }
 async function enviarComprovante(destinatarioEmail, assunto, texto, filename, fileBuffer) {
   if (!mailer) return false;
   await mailer.sendMail({
-    from: "Financeiro ${COMPANY_NAME}" <${SMTP_USER}>,
+    from: `"Financeiro ${COMPANY_NAME}" <${SMTP_USER}>`,
     to: destinatarioEmail,
     subject: assunto,
     text: texto,
@@ -571,19 +571,19 @@ async function postarComprovanteWebhook(url, payload) {
 async function handoff(to) {
   setStep(to, "human_handoff");
   await sendText(to,
-"👩‍💼 Ok! Vou transferir para um atendente humano.\nEnquanto isso, posso não responder.\n\nPara encerrar a conversa a qualquer momento, digite encerra.");
+"👩‍💼 Ok! Vou transferir para um atendente humano.\nEnquanto isso, posso não responder.\n\nPara *encerrar* a conversa a qualquer momento, digite *encerra*.");
 }
 async function startFeedback(to) {
   setStep(to, "feedback_ask");
-  await sendText(to, "📝 Avalie nosso atendimento\nDe 1 a 5, como você nos avalia?\n(1 = péssimo, 5 = excelente)");
+  await sendText(to, "📝 *Avalie nosso atendimento*\nDe *1 a 5*, como você nos avalia?\n(1 = péssimo, 5 = excelente)");
 }
 async function finishFeedback(to) {
-  await sendText(to, "✅ Obrigado pelo feedback!\n*Atendimento finalizado.* Quando quiser recomeçar, envie qualquer mensagem e eu mostro o menu.");
+  await sendText(to, "✅ Obrigado pelo feedback!\n*Atendimento finalizado.* Quando quiser recomeçar, envie *qualquer mensagem* e eu mostro o menu.");
   setStep(to, "ended_wait_any");
 }
 async function boasVindas(to, nomeGuess) {
   await sendText(to,
-Olá${nomeGuess ? `, ${nomeGuess} : ""}! 👋 Sou o assistente virtual da ${COMPANY_NAME}.
+`Olá${nomeGuess ? `, ${nomeGuess}` : ""}! 👋 Sou o assistente virtual da *${COMPANY_NAME}*.
 
 ${menuPrincipal()}
 
@@ -592,7 +592,7 @@ ${menuPrincipal()}
 💳 Pagamentos: ${PAYMENT_METHODS}
 📞 Suporte: ${SUPPORT_WHATS} | ✉️ ${SUPPORT_EMAIL}
 
-Digite menu a qualquer momento.`);
+Digite *menu* a qualquer momento.`);
 }
 
 /* ===========================
@@ -653,11 +653,11 @@ app.post("/webhook", async (req, res) => {
     }
     if (step === "feedback_ask") {
       const m = text.match(/^[1-5]$/);
-      if (!m) { await sendText(to, "Por favor, responda com um número de 1 a 5 (1 = péssimo, 5 = excelente)."); return; }
+      if (!m) { await sendText(to, "Por favor, responda com um número de *1 a 5* (1 = péssimo, 5 = excelente)."); return; }
       const nota = Number(m[0]);
       sessions[to] = { ...(sessions[to]||{}), fbScore: nota };
       setStep(to, "feedback_comment");
-      await sendText(to, "Obrigado! Quer deixar algum comentário? (se não quiser, responda pular)");
+      await sendText(to, "Obrigado! Quer deixar algum comentário? (se não quiser, responda *pular*)");
       return;
     }
     if (step === "feedback_comment") {
@@ -717,7 +717,7 @@ app.post("/webhook", async (req, res) => {
       if (text === "1" || text.includes("segunda via")) { await iniciarSegundaVia(to); return; }
       if (text === "2" || text.includes("comprovante")) { await iniciarComprovante(to); return; }
       if (text === "3") {
-        await sendText(to, "🔁 Negociação/atualização – em breve. Digite 4 para atendente.");
+        await sendText(to, "🔁 Negociação/atualização – em breve. Digite *4* para atendente.");
         clearStep(to); return;
       }
       if (text === "9") { clearStep(to); await boasVindas(to, profileName); return; }
@@ -728,10 +728,10 @@ app.post("/webhook", async (req, res) => {
         const onlyDigitsText = rawText.replace(/\D/g, "");
         const isCPFouCNPJ = onlyDigitsText.length >= 11 && onlyDigitsText.length <= 14;
         const isEmail = rawText.includes("@") && rawText.includes(".");
-        if (!isCPFouCNPJ && !isEmail) { await sendText(to, "Por favor, informe CPF/CNPJ (11–14 dígitos) ou e-mail válido."); return; }
+        if (!isCPFouCNPJ && !isEmail) { await sendText(to, "Por favor, informe *CPF/CNPJ* (11–14 dígitos) ou *e-mail* válido."); return; }
         try {
           const cust = await findCustomer({ cpfCnpj: isCPFouCNPJ ? rawText : undefined, email: isEmail ? rawText : undefined });
-          if (!cust) { await sendText(to, "Não encontrei cadastro no Asaas com esse CPF/CNPJ ou e-mail. Tente novamente ou digite 4 para atendente."); return; }
+          if (!cust) { await sendText(to, "Não encontrei cadastro no Asaas com esse CPF/CNPJ ou e-mail. Tente novamente ou digite *4* para atendente."); return; }
 
           const msgOut = await buildSecondCopyMessage(cust.id);
           await sendText(to, msgOut);
@@ -744,7 +744,7 @@ app.post("/webhook", async (req, res) => {
               const valorBR = (typeof p.value === "number") ? p.value.toFixed(2).replace(".", ",") : String(p.value || "");
               let url = p.bankSlipUrl || p.invoiceUrl || "";
               if (!url && p.billingType === "PIX") {
-                try { const { data: pix } = await asaas.get(/payments/${p.id}/pixQrCode); url = pix.payload || ""; } catch (_) {}
+                try { const { data: pix } = await asaas.get(`/payments/${p.id}/pixQrCode`); url = pix.payload || ""; } catch (_) {}
               }
               if (url) {
                 await sendTemplateSegundaVia(to, { nome: nomeCliente, faturaId: p.id, vencimentoBR, valorBR, url });
@@ -759,27 +759,27 @@ app.post("/webhook", async (req, res) => {
           clearStep(to); return;
         }
       } else {
-        await sendText(to, "Integração Asaas não configurada. Defina ASAAS_API_KEY.");
+        await sendText(to, "Integração Asaas não configurada. Defina *ASAAS_API_KEY*.");
         clearStep(to); return;
       }
     }
     if (step === "financeiro_comprovante_ask_id") {
-      if (!rawText) { await sendText(to, "Por favor, informe o ID/Nº da fatura (ex.: #RS-2025-1234)."); return; }
+      if (!rawText) { await sendText(to, "Por favor, informe o *ID/Nº da fatura* (ex.: #RS-2025-1234)."); return; }
       await confirmarFaturaId(to, rawText); return;
     }
     if (step === "financeiro_comprovante_wait_file") {
       const sess = sessions[to] || {};
       const faturaId = sess.faturaId || "N/D";
       const midia =
-        msg?.image ? { id: msg.image.id, mime: msg.image.mime_type, nome: comprovante_${faturaId}.jpg } :
-        msg?.document ? { id: msg.document.id, mime: msg.document.mime_type, nome: msg.document.filename || comprovante_${faturaId}.pdf } :
+        msg?.image ? { id: msg.image.id, mime: msg.image.mime_type, nome: `comprovante_${faturaId}.jpg` } :
+        msg?.document ? { id: msg.document.id, mime: msg.document.mime_type, nome: msg.document.filename || `comprovante_${faturaId}.pdf` } :
         null;
 
-      if (!midia) { await sendText(to, "Envie o arquivo do comprovante como imagem (foto/print) ou documento PDF."); return; }
+      if (!midia) { await sendText(to, "Envie o *arquivo do comprovante* como *imagem* (foto/print) ou *documento PDF*."); return; }
 
       try {
         const { buffer, contentType } = await obterUrlMidia(midia.id);
-        const filename = midia.nome || comprovante_${faturaId};
+        const filename = midia.nome || `comprovante_${faturaId}`;
         const registroTxt =
 `Comprovante recebido via WhatsApp
 Empresa: ${COMPANY_NAME}
@@ -789,7 +789,7 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
 
         let enviado = false;
         if (mailer) {
-          try { await enviarComprovante(MAIL_TO, [Comprovante] ${faturaId} - ${COMPANY_NAME}, registroTxt, filename, buffer); enviado = true; }
+          try { await enviarComprovante(MAIL_TO, `[Comprovante] ${faturaId} - ${COMPANY_NAME}`, registroTxt, filename, buffer); enviado = true; }
           catch (e) { console.error("Falha e-mail:", e?.response?.data || e); }
         }
         if (!enviado && PROVAS_WEBHOOK_URL) {
@@ -804,9 +804,9 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
         }
 
         if (enviado) {
-          await sendText(to, ✅ Comprovante da fatura *${faturaId}* recebido com sucesso! Nossa equipe vai validar e retornar se necessário.);
+          await sendText(to, `✅ Comprovante da fatura *${faturaId}* recebido com sucesso! Nossa equipe vai validar e retornar se necessário.`);
         } else {
-          await sendText(to, Recebi o seu arquivo, mas *não consegui registrar automaticamente* agora.\nEnvie por e-mail: ${SUPPORT_EMAIL} ou tente novamente mais tarde.);
+          await sendText(to, `Recebi o seu arquivo, mas *não consegui registrar automaticamente* agora.\nEnvie por e-mail: ${SUPPORT_EMAIL} ou tente novamente mais tarde.`);
         }
         setStep(to, "financeiro_menu"); return;
       } catch (e) {
@@ -841,7 +841,7 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
       await endChat(to);
 
     } else {
-      await sendText(to, Entendi sua mensagem 👌\n${menuPrincipal()});
+      await sendText(to, `Entendi sua mensagem 👌\n${menuPrincipal()}`);
     }
   } catch (e) {
     console.error("Erro no webhook:", e?.response?.data || e);
@@ -919,7 +919,7 @@ app.post("/webhook/asaas", async (req, res) => {
     // fallback: buscar telefone do customer
     if (!to && asaas && customerId) {
       try {
-        const { data: cust } = await asaas.get(/customers/${customerId});
+        const { data: cust } = await asaas.get(`/customers/${customerId}`);
         let phone = cust?.mobilePhone || cust?.phone || "";
         phone = onlyDigits(phone);
         if (phone && phone.length === 11) phone = "55" + phone;
@@ -960,6 +960,56 @@ app.post("/webhook/asaas", async (req, res) => {
     console.error("Erro /webhook/asaas:", e?.response?.data || e);
   }
 });
+
+/* =========================
+   PÁGINAS LEGAIS (Privacy/Terms/Data Deletion)
+   ========================= */
+function sendHtml(res, html) {
+  res.set("Content-Type","text/html; charset=utf-8").send(html);
+}
+
+app.get("/privacy", (req, res) => sendHtml(res, `<!doctype html><meta charset="utf-8">
+<title>Política de Privacidade - ${COMPANY_NAME}</title>
+<style>body{font-family:system-ui,Arial,sans-serif;max-width:860px;margin:40px auto;padding:0 16px;line-height:1.6}h1,h2{line-height:1.25}</style>
+<h1>Política de Privacidade</h1>
+<p>Esta Política descreve como a <b>${COMPANY_NAME}</b> trata dados pessoais no atendimento via WhatsApp e integrações (ex.: Asaas).</p>
+<h2>Dados coletados</h2>
+<ul><li>Número de WhatsApp (wa_id), nome de perfil e mensagens.</li><li>Dados de cobrança quando necessário (CPF/CNPJ, e-mail, faturas/links Asaas).</li><li>Metadados técnicos (IP, data/horário, logs) para segurança/operacionalização.</li></ul>
+<h2>Finalidades</h2>
+<ul><li>Atendimento, suporte e rotinas financeiras (2ª via, comprovantes).</li><li>Segurança, prevenção a fraudes, auditoria e obrigações legais.</li></ul>
+<h2>Bases legais (LGPD)</h2>
+<ul><li>Execução de contrato e procedimentos preliminares;</li><li>Cumprimento de obrigação legal;</li><li>Legítimo interesse;</li><li>Consentimento (quando aplicável).</li></ul>
+<h2>Compartilhamento</h2>
+<ul><li>Meta/WhatsApp Cloud API, Asaas, provedores de infraestrutura (ex.: Render) e e-mail (quando usado).</li></ul>
+<h2>Retenção</h2><p>Pelo tempo necessário ao atendimento, obrigações legais e defesa de direitos.</p>
+<h2>Direitos do titular</h2><p>Acesso, correção, portabilidade, anonimização/exclusão e informações sobre uso/compartilhamento.</p>
+<h2>Contato</h2><p>E-mail: <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p>
+<h2>Atualizações</h2><p>Podemos atualizar esta Política a qualquer momento; consulte esta página.</p>`)));
+
+app.get("/terms", (req, res) => sendHtml(res, `<!doctype html><meta charset="utf-8">
+<title>Termos de Uso - ${COMPANY_NAME}</title>
+<style>body{font-family:system-ui,Arial,sans-serif;max-width:860px;margin:40px auto;padding:0 16px;line-height:1.6}h1,h2{line-height:1.25}</style>
+<h1>Termos de Uso</h1>
+<p>Estes Termos regem o uso do atendimento via WhatsApp oferecido por <b>${COMPANY_NAME}</b>.</p>
+<h2>Uso aceitável</h2>
+<ul><li>Proibido spam, conteúdo ilícito/ofensivo e automações não autorizadas.</li><li>Podemos bloquear o uso em caso de abuso.</li></ul>
+<h2>Mensagens e templates</h2><p>Utilizamos modelos aprovados pela Meta para cobranças, lembretes e recibos.</p>
+<h2>Disponibilidade</h2><p>Pode haver indisponibilidade por manutenção, instabilidades de terceiros ou força maior.</p>
+<h2>Preços</h2><p>Valores informados via chat são indicativos; prevalece a proposta/contrato.</p>
+<h2>Privacidade</h2><p>Veja a <a href="/privacy">Política de Privacidade</a>.</p>
+<h2>Contato</h2><p>E-mail: <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p>
+<h2>Foro</h2><p>Foro de Caxias do Sul/RS.</p>`)));
+
+app.get("/data-deletion", (req, res) => sendHtml(res, `<!doctype html><meta charset="utf-8">
+<title>Exclusão de Dados - ${COMPANY_NAME}</title>
+<style>body{font-family:system-ui,Arial,sans-serif;max-width:860px;margin:40px auto;padding:0 16px;line-height:1.6}h1,h2{line-height:1.25}</style>
+<h1>Exclusão de Dados</h1>
+<ol>
+  <li>Envie um e-mail para <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a> com assunto “Exclusão de Dados – WhatsApp”.</li>
+  <li>Informe seu número de WhatsApp, nome/razão social e identificadores de cobrança (se houver).</li>
+  <li>Responderemos em até 15 dias úteis com a confirmação ou justificativa legal para retenção.</li>
+</ol>
+<p>Alguns registros podem ser mantidos pelo prazo legal mínimo.</p>`)));
 
 /* ======================
    SERVIDOR

@@ -5,15 +5,12 @@ const axios = require("axios");
 const nodemailer = require("nodemailer");
 
 const app = express();
-// === Verificação do Webhook (GET) === app.get('/webhook', (req, res) => {   const VERIFY_TOKEN = process.env.VERIFY_TOKEN;   const mode = req.query['hub.mode'];   const token = req.query['hub.verify_token'];   const challenge = req.query['hub.challenge'];    if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {     console.log('Webhook verificado com sucesso');     return res.status(200).send(challenge);   }   return res.sendStatus(403); });  // === Recebe eventos do WhatsApp (POST) e responde === app.post('/webhook', async (req, res) => {   try {     // Responde 200 imediatamente para a Meta     res.sendStatus(200);      const value = req.body?.entry?.[0]?.changes?.[0]?.value || {};     const msg   = value.messages?.[0];                 // mensagem recebida     const waId  = value.contacts?.[0]?.wa_id;          // wa_id do contato      if (!msg) return; // ignora eventos sem mensagem do usuário      // >>> DESTINATÁRIO: quem enviou a mensagem (somente dígitos, sem +)     const to = String(msg.from || waId || '').replace(/\D/g, '');     console.log('>> Enviando resposta para:', to);      // Texto recebido     const textIn = (msg.text?.body || '').trim().toLowerCase();      // Resposta padrão / menu     let resposta = 'Digite *menu* para começar.';     if (['menu', 'inicio', 'início'].includes(textIn)) {       resposta = [         '1 Orçamento',         '2 Suporte',         '3 Financeiro',         '4 Outros assuntos'       ].join('
-');     } else if (textIn === '3') {       resposta = 'Financeiro:
-1 - Segunda via da fatura
-Escreva: *2via* para receber o link.';     } else if (['2via', 'segunda via', 'fatura'].includes(textIn)) {       resposta = 'Para segunda via, informe seu CPF/CNPJ ou número do contrato.';     }      // Envia a resposta     await axios.post(       `https://graph.facebook.com/v20.0/${process.env.PHONE_NUMBER_ID}/messages`,       {         messaging_product: 'whatsapp',         to,         type: 'text',         text: { body: resposta }       },       { headers: { Authorization: `Bearer ${process.env.WHATS_TOKEN}` } }     );   } catch (err) {     console.error('Erro ao responder:', err.response?.data || err.message || err);   } });());
+app.use(bodyParser.json());
 
 // === VARIÁVEIS DE AMBIENTE (obrigatórias) ===
 const VERIFY_TOKEN    = process.env.VERIFY_TOKEN || "meu_token_de_verificacao";
-const WHATS_TOKEN     = process.env.WHATS_TOKEN;           // Token Cloud API (permanente)
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;       // ID do número do WhatsApp
+const WHATS_TOKEN     = process.env.WHATS_TOKEN;           // Token Cloud API
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;       // ID numérico do número WhatsApp
 const ATENDINICIO     = process.env.ATENDINICIO || "08:30";
 const ATENDFIM        = process.env.ATENDFIM    || "18:00";
 const ATENDDIAS       = process.env.ATENDDIAS   || "Seg a Sex";
@@ -52,10 +49,10 @@ const PROVAS_WEBHOOK_URL = process.env.PROVAS_WEBHOOK_URL || "";
 
 // ======== STATE (memória simples por número) ========
 const sessions = Object.create(null);
-// sessions[from] = { step, faturaId? }
-function setStep(from, step) { sessions[from] = { ...(sessions[from]||{}), step }; }
-function getStep(from) { return sessions[from]?.step || null; }
-function clearStep(from) { delete sessions[from]; }
+// sessions[to] = { step, faturaId? }
+function setStep(to, step) { sessions[to] = { ...(sessions[to]||{}), step }; }
+function getStep(to) { return sessions[to]?.step || null; }
+function clearStep(to) { delete sessions[to]; }
 
 // ======== HELPERS =========
 function protocolo() {
@@ -64,21 +61,26 @@ function protocolo() {
   return `RS-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}-${n}`;
 }
 
+// envia texto (sempre sanitizando o número)
 async function sendText(to, text) {
+  to = String(to || "").replace(/\D/g, "");
+  console.log(">> sendText() para:", to);
+
   await axios.post(
     `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
-    { messaging_product: "whatsapp", to, text: { body: text } },
+    { messaging_product: "whatsapp", to, type: "text", text: { body: text } },
     { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } }
   );
 }
 
 async function sendTemplateSegundaVia(to, { nome, faturaId, vencimentoBR, valorBR, url }) {
+  to = String(to || "").replace(/\D/g, "");
   const payload = {
     messaging_product: "whatsapp",
     to,
     type: "template",
     template: {
-      name: "segunda_via_fatura",   // nome do template APROVADO (pt_BR)
+      name: "segunda_via_fatura",   // nome do template APROVADO na sua conta
       language: { code: "pt_BR" },
       components: [
         {
@@ -116,7 +118,7 @@ Envie o número da opção ou escreva uma frase com seu pedido.`
 }
 
 async function boasVindas(to, nomeGuess) {
-  const msg =
+  await sendText(to,
 `Olá${nomeGuess ? `, ${nomeGuess}` : ""}! 👋 Sou o assistente virtual da *${COMPANY_NAME}*.
 
 ${menuPrincipal()}
@@ -126,8 +128,7 @@ ${menuPrincipal()}
 💳 Pagamentos: ${PAYMENT_METHODS}
 📞 Suporte: ${SUPPORT_WHATS} | ✉️ ${SUPPORT_EMAIL}
 
-Digite *menu* a qualquer momento.`;
-  await sendText(to, msg);
+Digite *menu* a qualquer momento.`);
 }
 
 // ======== FLUXOS PRINCIPAIS ========
@@ -284,50 +285,63 @@ async function postarComprovanteWebhook(url, payload) {
 }
 
 // ======== WEBHOOKS ========
-// Verificação do webhook (Meta)
+
+// Verificação do webhook (Meta) - GET
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === VERIFY_TOKEN) return res.status(200).send(challenge);
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    console.log("Webhook verificado com sucesso");
+    return res.status(200).send(challenge);
+  }
   return res.sendStatus(403);
 });
 
-// Recebimento de mensagens
+// Recebimento de mensagens - POST
 app.post("/webhook", async (req, res) => {
   try {
-    const change = req.body.entry?.[0]?.changes?.[0];
-    const msg = change?.value?.messages?.[0];
-    const from = msg?.from;
-    if (!from) return res.sendStatus(200);
+    // responde rápido para a Meta
+    res.sendStatus(200);
 
-    const profileName = change?.value?.contacts?.[0]?.profile?.name;
-    const type = msg.type;
-    const rawText = type === "text" ? (msg.text.body || "").trim() : "";
-    const text = rawText.toLowerCase();
+    const change = req.body.entry?.[0]?.changes?.[0];
+    const value  = change?.value || {};
+    const msg    = value.messages?.[0];            // mensagem do usuário
+    const waId   = value.contacts?.[0]?.wa_id;     // wa_id do contato
+
+    if (!msg) return; // ignora entregas/status sem mensagem do usuário
+
+    // DESTINATÁRIO: quem enviou (só dígitos)
+    const to = String(msg.from || waId || "").replace(/\D/g, "");
+    console.log(">> Enviando resposta para:", to);
+
+    // texto recebido
+    const rawText = msg.type === "text" ? (msg.text.body || "") : "";
+    const text = rawText.trim().toLowerCase();
+    const profileName = value.contacts?.[0]?.profile?.name;
 
     const chamaMenu = ["oi","olá","ola","bom dia","boa tarde","boa noite","menu","iniciar","start"];
-    const step = getStep(from);
+    const step = getStep(to);
 
     // ======= SUBMENU FINANCEIRO =======
     if (step === "financeiro_menu") {
       if (text === "1" || text.includes("segunda via")) {
-        await iniciarSegundaVia(from);
-        return res.sendStatus(200);
+        await iniciarSegundaVia(to);
+        return;
       } else if (text === "2" || text.includes("comprovante")) {
-        await iniciarComprovante(from);
-        return res.sendStatus(200);
+        await iniciarComprovante(to);
+        return;
       } else if (text === "3") {
-        await sendText(from, "🔁 Negociação/atualização – em breve. Digite *4* para falar com atendente.");
-        clearStep(from);
-        return res.sendStatus(200);
+        await sendText(to, "🔁 Negociação/atualização – em breve. Digite *4* para atendente.");
+        clearStep(to);
+        return;
       } else if (text === "9") {
-        clearStep(from);
-        await boasVindas(from, profileName);
-        return res.sendStatus(200);
+        clearStep(to);
+        await boasVindas(to, profileName);
+        return;
       } else {
-        await sendText(from, "Não entendi. " + menuFinanceiro());
-        return res.sendStatus(200);
+        await sendText(to, "Não entendi. " + menuFinanceiro());
+        return;
       }
     }
 
@@ -338,8 +352,8 @@ app.post("/webhook", async (req, res) => {
         const isCPFouCNPJ = onlyDigits.length >= 11 && onlyDigits.length <= 14;
         const isEmail = rawText.includes("@") && rawText.includes(".");
         if (!isCPFouCNPJ && !isEmail) {
-          await sendText(from, "Por favor, informe *CPF/CNPJ* (11–14 dígitos) ou *e-mail* válido.");
-          return res.sendStatus(200);
+          await sendText(to, "Por favor, informe *CPF/CNPJ* (11–14 dígitos) ou *e-mail* válido.");
+          return;
         }
         try {
           const cust = await findCustomer({
@@ -347,13 +361,13 @@ app.post("/webhook", async (req, res) => {
             email: isEmail ? rawText : undefined
           });
           if (!cust) {
-            await sendText(from, "Não encontrei cadastro no Asaas com esse CPF/CNPJ ou e-mail. Tente novamente ou digite *4* para atendente.");
-            return res.sendStatus(200);
+            await sendText(to, "Não encontrei cadastro no Asaas com esse CPF/CNPJ ou e-mail. Tente novamente ou digite *4* para atendente.");
+            return;
           }
 
           // mensagem em texto (lista)
           const msgOut = await buildSecondCopyMessage(cust.id);
-          await sendText(from, msgOut);
+          await sendText(to, msgOut);
 
           // envio de templates por fatura
           try {
@@ -370,7 +384,7 @@ app.post("/webhook", async (req, res) => {
                 } catch (_) {}
               }
               if (url) {
-                await sendTemplateSegundaVia(from, {
+                await sendTemplateSegundaVia(to, {
                   nome: nomeCliente,
                   faturaId: p.id,
                   vencimentoBR,
@@ -383,30 +397,30 @@ app.post("/webhook", async (req, res) => {
             console.error("Falha ao enviar template segunda via:", e?.response?.data || e);
           }
 
-          clearStep(from);
-          return res.sendStatus(200);
+          clearStep(to);
+          return;
         } catch (e) {
           console.error(e?.response?.data || e);
-          await sendText(from, "Tive um problema para consultar agora. Tente novamente em instantes.");
-          clearStep(from);
-          return res.sendStatus(200);
+          await sendText(to, "Tive um problema para consultar agora. Tente novamente em instantes.");
+          clearStep(to);
+          return;
         }
       } else {
-        await sendText(from, "Integração Asaas não configurada. Defina *ASAAS_API_KEY*.");
-        clearStep(from);
-        return res.sendStatus(200);
+        await sendText(to, "Integração Asaas não configurada. Defina *ASAAS_API_KEY*.");
+        clearStep(to);
+        return;
       }
     }
 
     // ======= Comprovante: pedir ID, receber arquivo e registrar =======
-    if (step === "financeiro_comprovante_ask_id") {
-      if (!rawText) { await sendText(from, "Por favor, informe o *ID/Nº da fatura* (ex.: #RS-2025-1234)."); return res.sendStatus(200); }
-      await confirmarFaturaId(from, rawText);
-      return res.sendStatus(200);
+    if (getStep(to) === "financeiro_comprovante_ask_id") {
+      if (!rawText) { await sendText(to, "Por favor, informe o *ID/Nº da fatura* (ex.: #RS-2025-1234)."); return; }
+      await confirmarFaturaId(to, rawText);
+      return;
     }
 
-    if (step === "financeiro_comprovante_wait_file") {
-      const sess = sessions[from] || {};
+    if (getStep(to) === "financeiro_comprovante_wait_file") {
+      const sess = sessions[to] || {};
       const faturaId = sess.faturaId || "N/D";
 
       // mídia: imagem ou documento
@@ -416,8 +430,8 @@ app.post("/webhook", async (req, res) => {
         null;
 
       if (!midia) {
-        await sendText(from, "Envie o *arquivo do comprovante* como *imagem* (foto/print) ou *documento PDF*.");
-        return res.sendStatus(200);
+        await sendText(to, "Envie o *arquivo do comprovante* como *imagem* (foto/print) ou *documento PDF*.");
+        return;
       }
 
       try {
@@ -428,7 +442,7 @@ app.post("/webhook", async (req, res) => {
 `Comprovante recebido via WhatsApp
 Empresa: ${COMPANY_NAME}
 Fatura: ${faturaId}
-Remetente (WhatsApp): ${from}
+Remetente (WhatsApp): ${to}
 Data: ${new Date().toLocaleString("pt-BR")}`;
 
         // 1) tentar e-mail
@@ -448,7 +462,7 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
             await postarComprovanteWebhook(PROVAS_WEBHOOK_URL, {
               company: COMPANY_NAME,
               faturaId,
-              from,
+              from: to,
               contentType,
               filename,
               receivedAt: new Date().toISOString(),
@@ -461,46 +475,43 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
         }
 
         if (enviado) {
-          await sendText(from, `✅ Comprovante da fatura *${faturaId}* recebido com sucesso! Nossa equipe vai validar e retornar se necessário.`);
+          await sendText(to, `✅ Comprovante da fatura *${faturaId}* recebido com sucesso! Nossa equipe vai validar e retornar se necessário.`);
         } else {
-          await sendText(from, `Recebi o seu arquivo, mas *não consegui registrar automaticamente* agora.\nEnvie por e-mail: ${SUPPORT_EMAIL} ou tente novamente mais tarde.`);
+          await sendText(to, `Recebi o seu arquivo, mas *não consegui registrar automaticamente* agora.\nEnvie por e-mail: ${SUPPORT_EMAIL} ou tente novamente mais tarde.`);
         }
 
-        clearStep(from);
-        return res.sendStatus(200);
+        clearStep(to);
+        return;
       } catch (e) {
         console.error("Erro ao processar mídia:", e?.response?.data || e);
-        await sendText(from, "Não consegui processar o arquivo agora. Tente novamente ou envie por e-mail.");
-        clearStep(from);
-        return res.sendStatus(200);
+        await sendText(to, "Não consegui processar o arquivo agora. Tente novamente ou envie por e-mail.");
+        clearStep(to);
+        return;
       }
     }
 
     // ======= FLUXO PADRÃO =======
     if (chamaMenu.some(k => text.startsWith(k))) {
-      clearStep(from);
-      await boasVindas(from, profileName);
+      clearStep(to);
+      await boasVindas(to, profileName);
     } else if (text === "1" || text.includes("orçamento") || text.includes("orcamento")) {
-      clearStep(from);
-      await fluxoOrcamento(from);
+      clearStep(to);
+      await fluxoOrcamento(to);
     } else if (text === "2" || text.includes("suporte")) {
-      clearStep(from);
-      await fluxoSuporte(from);
+      clearStep(to);
+      await fluxoSuporte(to);
     } else if (text === "3" || text.includes("financeiro")) {
-      await fluxoFinanceiroIntro(from);
+      await fluxoFinanceiroIntro(to);
     } else if (text === "4" || text.includes("outros") || text.includes("atendente") || text.includes("humano")) {
-      clearStep(from);
-      await handoff(from);
+      clearStep(to);
+      await handoff(to);
     } else {
-      await sendText(from, `Entendi sua mensagem 👌\n${menuPrincipal()}`);
+      await sendText(to, `Entendi sua mensagem 👌\n${menuPrincipal()}`);
     }
-
-    
-    res.sendStatus(200);
   } catch (e) {
-    console.error(e?.response?.data || e);
-    res.sendStatus(200);
+    console.error("Erro no webhook:", e?.response?.data || e);
   }
 });
 
+// porta
 app.listen(process.env.PORT || 3000, () => console.log("Bot online"));

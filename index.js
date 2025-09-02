@@ -5,7 +5,10 @@ const axios = require("axios");
 const nodemailer = require("nodemailer");
 
 const app = express();
-app.use(bodyParser.json());
+// === Verificação do Webhook (GET) === app.get('/webhook', (req, res) => {   const VERIFY_TOKEN = process.env.VERIFY_TOKEN;   const mode = req.query['hub.mode'];   const token = req.query['hub.verify_token'];   const challenge = req.query['hub.challenge'];    if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {     console.log('Webhook verificado com sucesso');     return res.status(200).send(challenge);   }   return res.sendStatus(403); });  // === Recebe eventos do WhatsApp (POST) e responde === app.post('/webhook', async (req, res) => {   try {     // Responde 200 imediatamente para a Meta     res.sendStatus(200);      const value = req.body?.entry?.[0]?.changes?.[0]?.value || {};     const msg   = value.messages?.[0];                 // mensagem recebida     const waId  = value.contacts?.[0]?.wa_id;          // wa_id do contato      if (!msg) return; // ignora eventos sem mensagem do usuário      // >>> DESTINATÁRIO: quem enviou a mensagem (somente dígitos, sem +)     const to = String(msg.from || waId || '').replace(/\D/g, '');     console.log('>> Enviando resposta para:', to);      // Texto recebido     const textIn = (msg.text?.body || '').trim().toLowerCase();      // Resposta padrão / menu     let resposta = 'Digite *menu* para começar.';     if (['menu', 'inicio', 'início'].includes(textIn)) {       resposta = [         '1 Orçamento',         '2 Suporte',         '3 Financeiro',         '4 Outros assuntos'       ].join('
+');     } else if (textIn === '3') {       resposta = 'Financeiro:
+1 - Segunda via da fatura
+Escreva: *2via* para receber o link.';     } else if (['2via', 'segunda via', 'fatura'].includes(textIn)) {       resposta = 'Para segunda via, informe seu CPF/CNPJ ou número do contrato.';     }      // Envia a resposta     await axios.post(       `https://graph.facebook.com/v20.0/${process.env.PHONE_NUMBER_ID}/messages`,       {         messaging_product: 'whatsapp',         to,         type: 'text',         text: { body: resposta }       },       { headers: { Authorization: `Bearer ${process.env.WHATS_TOKEN}` } }     );   } catch (err) {     console.error('Erro ao responder:', err.response?.data || err.message || err);   } });());
 
 // === VARIÁVEIS DE AMBIENTE (obrigatórias) ===
 const VERIFY_TOKEN    = process.env.VERIFY_TOKEN || "meu_token_de_verificacao";
@@ -492,6 +495,7 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
       await sendText(from, `Entendi sua mensagem 👌\n${menuPrincipal()}`);
     }
 
+    
     res.sendStatus(200);
   } catch (e) {
     console.error(e?.response?.data || e);

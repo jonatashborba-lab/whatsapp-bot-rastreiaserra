@@ -1020,5 +1020,26 @@ app.post("/webhook/asaas", async (req, res) => {
    SERVIDOR
    ====================== */
 // endpoint leve só pra manter a instância acordada
+app.get("/privacidade", (req, res) => {
+  res.type("text/plain").send(
+`Política de Privacidade — Rastreia Serra
+Coletamos e tratamos dados para prestação do serviço de rastreamento e atendimento.
+Contato: rastreiaserra@outlook.com. Exercício de direitos (LGPD) via e-mail.`
+  );
+});
+app.get("/termos", (req, res) => {
+  res.type("text/plain").send(
+`Termos de Serviço — Rastreia Serra
+Uso implica concordância. Faturamento conforme plano; suspensão por inadimplência após aviso.
+Suporte conforme horários informados no menu.`
+  );
+});
+app.get("/exclusao-de-dados", (req, res) => {
+  res.type("text/plain").send(
+`Exclusão de Dados — Rastreia Serra
+Para excluir seus dados, envie e-mail para rastreiaserra@outlook.com com nome, documento e telefone.
+Responderemos com confirmação e prazo conforme a LGPD.`
+  );
+});
 app.get("/health", (req, res) => res.status(200).send("ok"));
 app.listen(PORT, () => console.log(`Bot online na porta ${PORT}`));

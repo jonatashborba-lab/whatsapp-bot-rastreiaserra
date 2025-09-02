@@ -49,7 +49,7 @@ const PROVAS_WEBHOOK_URL = process.env.PROVAS_WEBHOOK_URL || "";
 
 // ======== STATE (memória simples por número) ========
 const sessions = Object.create(null);
-// sessions[to] = { step, faturaId? }
+// sessions[to] = { step, faturaId?, protocolo?, tipo? }
 function setStep(to, step) { sessions[to] = { ...(sessions[to]||{}), step }; }
 function getStep(to) { return sessions[to]?.step || null; }
 function clearStep(to) { delete sessions[to]; }
@@ -60,6 +60,7 @@ function protocolo() {
   const n = Math.floor(Math.random() * 9000) + 1000;
   return `RS-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}-${n}`;
 }
+function brl(n) { return `R$ ${Number(n).toFixed(2).replace('.', ',')}`; }
 
 // envia texto (sempre sanitizando o número)
 async function sendText(to, text) {
@@ -104,67 +105,183 @@ async function sendTemplateSegundaVia(to, { nome, faturaId, vencimentoBR, valorB
   );
 }
 
+// ======== MENUS ========
 function menuPrincipal() {
   return (
 `🤖 *Atendimento ${COMPANY_NAME}*
 
-1️⃣ Orçamento
-2️⃣ Suporte
+1️⃣ Planos e Preços
+2️⃣ Suporte Técnico
 3️⃣ Financeiro
-4️⃣ Outros assuntos
+4️⃣ Falar com atendente
 
-Envie o número da opção ou escreva uma frase com seu pedido.`
+Envie o número da opção ou escreva seu pedido.`
   );
 }
 
-async function boasVindas(to, nomeGuess) {
+// ——— Planos e Preços ———
+const PRICE_MENSAL = 49.90;     // R$ por veículo/mês (1 a 3 veículos)
+const FEE_ADESAO   = 100.00;    // R$ por veículo (taxa única)
+
+function menuPlanos() {
+  return (
+`*Selecione o tipo de veículo:*
+1) Carro de passeio
+2) Moto
+3) Caminhão
+4) Ônibus
+5) Veículo agrícola
+6) Embarcação
+7) Gerador
+8) Utilitário
+
+9) Retornar ao menu principal
+10) Falar com atendente
+0) Encerrar atendimento`
+  );
+}
+const TIPOS_VEICULO = {
+  "1": "Carro de passeio",
+  "2": "Moto",
+  "3": "Caminhão",
+  "4": "Ônibus",
+  "5": "Veículo agrícola",
+  "6": "Embarcação",
+  "7": "Gerador",
+  "8": "Utilitário"
+};
+
+async function fluxoPlanosIntro(to) {
+  await sendText(to, `📦 *Planos e Preços*\n${menuPlanos()}`);
+  setStep(to, "planos_menu");
+}
+async function planosPedirFormulario(to, tipo) {
+  sessions[to] = { ...(sessions[to]||{}), step: "planos_form", tipo };
   await sendText(to,
-`Olá${nomeGuess ? `, ${nomeGuess}` : ""}! 👋 Sou o assistente virtual da *${COMPANY_NAME}*.
+`📝 *${tipo}* — formulário:
+Digite em *uma única mensagem*:
+Marca: ...
+Modelo: ...
+Ano: ...
+Quantidade de veículos: ...
 
-${menuPrincipal()}
+(digite *9* para voltar ao menu principal, *10* para atendente, *0* para encerrar)`);
+}
+async function planosProcessarFormulario(to, rawText) {
+  const tipo = sessions[to]?.tipo || "Veículo";
+  const numeros = (rawText.match(/\d+/g) || []).map(n => Number(n));
+  let qtd = numeros.reverse().find(n => n >= 1 && n <= 100 && n < 1900) || 1;
 
-🕒 Horário: ${ATENDDIAS}, ${ATENDINICIO}–${ATENDFIM}.
-📍 Endereço: ${COMPANY_ADDRESS}
-💳 Pagamentos: ${PAYMENT_METHODS}
-📞 Suporte: ${SUPPORT_WHATS} | ✉️ ${SUPPORT_EMAIL}
+  let msgPreco;
+  if (qtd >= 1 && qtd <= 3) {
+    const totalMensal  = PRICE_MENSAL * qtd;
+    const totalAdesao  = FEE_ADESAO   * qtd;
+    msgPreco =
+`✅ Para *${qtd}* ${qtd>1?'veículos':'veículo'} *${tipo}*:
+• Mensalidade: *${brl(PRICE_MENSAL)} por veículo* → Total: *${brl(totalMensal)}*
+• Taxa de adesão: *${brl(FEE_ADESAO)} por veículo* → Total: *${brl(totalAdesao)}*`;
+  } else {
+    msgPreco =
+`ℹ️ Para frotas acima de *3 veículos*, temos condições diferenciadas.
+Posso te encaminhar a um atendente para proposta personalizada.`;
+  }
 
-Digite *menu* a qualquer momento.`);
+  await sendText(to,
+`${msgPreco}
+
+Se desejar, envie novamente o formulário com outra quantidade.
+Ou digite:
+*9* voltar ao menu principal
+*10* falar com atendente
+*0* encerrar`);
+  setStep(to, "planos_menu");
+}
+async function endChat(to) {
+  await sendText(to, "✅ Atendimento encerrado. Quando precisar, mande *menu*. Até logo!");
+  clearStep(to);
 }
 
-// ======== FLUXOS PRINCIPAIS ========
-async function fluxoOrcamento(to) {
-  const id = protocolo();
-  await sendText(to,
-`📝 *Orçamento*
-Me informe os detalhes do rastreamento/serviço:
-• Tipo de veículo
-• Cidade/CEP
-• Prazo ou data
-• Orçamento aproximado
+// ——— Suporte Técnico ———
+function menuSuporte() {
+  return (
+`🛠️ *Suporte Técnico*
 
+1) Não consigo acessar o aplicativo
+2) Meu veículo está offline na plataforma
+3) Esqueci a senha e o usuário de acesso
+4) Cancelar o serviço
+5) Retornar ao menu anterior
+
+Comandos rápidos:
+9) Falar com atendente
+0) Encerrar atendimento`
+  );
+}
+async function fluxoSuporteIntro(to) {
+  await sendText(to, menuSuporte());
+  setStep(to, "suporte_menu");
+}
+async function suporteAcessoApp(to) {
+  await sendText(to,
+`🔐 *Acesso ao aplicativo — passos rápidos*
+1) Verifique se a *fatura está em dia*. Em atraso, o serviço pode estar bloqueado.
+2) Confira se *login e senha* foram digitados corretamente (maiúsculas/minúsculas).
+
+Se ainda não conseguir, digite *9* para falar com um atendente, ou *0* para encerrar.`);
+}
+async function suporteVeiculoOffline(to) {
+  await sendText(to,
+`📡 *Veículo offline — como verificar*
+1) O veículo está com a *chave/ignição desligada*?
+2) Se o tempo offline for *menor que 1h*, pode ser apenas *hibernação* (após ~5min com chave desligada).
+3) *Ligue a chave* e aguarde alguns instantes. Se não voltar online, digite *9* para falar com atendente.
+Se o problema foi resolvido, digite *0* para encerrar.`);
+}
+async function suporteEsqueciAcessoIntro(to) {
+  setStep(to, "suporte_recuperacao");
+  const id = protocolo();
+  sessions[to] = { ...(sessions[to]||{}), protocolo: id };
+  await sendText(to,
+`🧩 *Recuperação de acesso*
+Não se preocupe, vamos criar um novo acesso.
+
+Envie *em uma única mensagem*:
+1) Nome completo
+2) Empresa (se houver)
+3) Placa do veículo
+
+Exemplo:
+Nome: João da Silva
+Empresa: Rastreia Serra
+Placa: ABC1D23
+
+(Atalhos: *5* voltar, *9* atendente, *0* encerrar)
 Protocolo: *${id}*`);
 }
-
-async function fluxoSuporte(to) {
+async function suporteEsqueciAcessoProcessar(to, rawText) {
+  const id = sessions[to]?.protocolo || protocolo();
   await sendText(to,
-`🛠️ *Suporte ${COMPANY_NAME}*
-Descreva o problema em uma frase (ex.: "não consigo acessar", "dúvida técnica").
-📞 ${SUPPORT_WHATS} | ✉️ ${SUPPORT_EMAIL}
-Se preferir, digite *4* para falar com um atendente.`);
-}
+`✅ Recebi os dados para criar novo acesso.
+${rawText}
 
-async function fluxoOutros(to) {
+*Protocolo:* ${id}
+Um atendente vai te auxiliar assim que possível.
+
+(Atalhos: *5* voltar ao menu anterior, *9* atendente, *0* encerrar)`);
+  setStep(to, "suporte_menu");
+}
+async function suporteCancelarServico(to) {
   await sendText(to,
-`🗂️ *Outros assuntos*
-Escreva seu pedido em uma frase, ou digite *4* para falar com um atendente.`);
+`📬 *Cancelamento do serviço*
+Para solicitar o cancelamento, envie um e-mail informando o motivo para:
+✉️ *rastreiaserra@outlook.com*
+
+Depois de enviar o e-mail:
+• Digite *5* para retornar ao menu anterior
+• Ou *0* para encerrar`);
 }
 
-async function handoff(to) {
-  await sendText(to, "👩‍💼 Ok! Vou transferir para um atendente humano. Aguarde um instante.");
-  // aqui você pode notificar seu time por e-mail/Slack/WhatsApp interno
-}
-
-// ======== FINANCEIRO ========
+// ——— Financeiro ———
 function menuFinanceiro() {
   return (
 `💰 *Financeiro ${COMPANY_NAME}*
@@ -176,13 +293,10 @@ function menuFinanceiro() {
 Envie o número da opção.`
   );
 }
-
 async function fluxoFinanceiroIntro(to) {
   await sendText(to, menuFinanceiro());
   setStep(to, "financeiro_menu");
 }
-
-// --- Segunda via (Asaas) ---
 async function iniciarSegundaVia(to) {
   if (!asaas) {
     await sendText(to,
@@ -198,8 +312,6 @@ Informe *CPF/CNPJ* ou *e-mail* do cadastro:
 Ex.: 000.000.000-00  *ou*  cliente@empresa.com`);
   setStep(to, "financeiro_segundavia");
 }
-
-// --- Asaas helpers ---
 async function findCustomer({ cpfCnpj, email }) {
   const params = {};
   if (cpfCnpj) params.cpfCnpj = cpfCnpj.replace(/\D/g, "");
@@ -212,7 +324,6 @@ async function listOpenPayments(customerId) {
   const { data } = await asaas.get("/payments", { params });
   return data?.data || [];
 }
-
 async function buildSecondCopyMessage(customerId) {
   const payments = await listOpenPayments(customerId);
   if (!payments.length) return "✅ Nenhuma cobrança pendente encontrada no seu cadastro.";
@@ -226,17 +337,13 @@ async function buildSecondCopyMessage(customerId) {
       try {
         const { data } = await asaas.get(`/payments/${p.id}/pixQrCode`);
         link = `PIX copia-e-cola:\n${data.payload}`;
-      } catch {
-        link = "PIX disponível (erro ao gerar QR Code).";
-      }
+      } catch { link = "PIX disponível (erro ao gerar QR Code)."; }
     }
     out.push(`• #${p.id} | Venc.: ${venc} | Valor: R$ ${valor}\n${link || "Link indisponível"}`);
   }
   out.push("\nTambém enviamos a *segunda via* como mensagem estruturada. Se precisar de ajuda, responda com *4* para atendente.");
   return out.join("\n");
 }
-
-// ======== Comprovante (email/webhook) ========
 async function iniciarComprovante(to) {
   await sendText(to,
 `📎 *Enviar comprovante de pagamento*
@@ -244,28 +351,23 @@ async function iniciarComprovante(to) {
 2) Em seguida, *envie o arquivo* do comprovante (imagem ou PDF).`);
   sessions[to] = { step: "financeiro_comprovante_ask_id" };
 }
-
 async function confirmarFaturaId(to, rawText) {
   const faturaId = rawText.trim();
   sessions[to] = { step: "financeiro_comprovante_wait_file", faturaId };
   await sendText(to, `Perfeito! Agora *envie o arquivo* do comprovante (foto/print ou PDF) referente à fatura *${faturaId}*.`);
 }
-
 async function obterUrlMidia(mediaId) {
-  // 1) metadados para URL temporária
   const meta = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, {
     headers: { Authorization: `Bearer ${WHATS_TOKEN}` }
   });
   const url = meta.data?.url;
   if (!url) throw new Error("URL de mídia não encontrada");
-  // 2) baixa o binário
   const fileResp = await axios.get(url, {
     responseType: "arraybuffer",
     headers: { Authorization: `Bearer ${WHATS_TOKEN}` }
   });
   return { buffer: Buffer.from(fileResp.data), contentType: meta.data?.mime_type || "application/octet-stream" };
 }
-
 async function enviarComprovante(destinatarioEmail, assunto, texto, filename, fileBuffer) {
   if (!mailer) return false;
   await mailer.sendMail({
@@ -277,7 +379,6 @@ async function enviarComprovante(destinatarioEmail, assunto, texto, filename, fi
   });
   return true;
 }
-
 async function postarComprovanteWebhook(url, payload) {
   if (!url) return false;
   await axios.post(url, payload, { timeout: 15000 });
@@ -323,53 +424,63 @@ app.post("/webhook", async (req, res) => {
     const chamaMenu = ["oi","olá","ola","bom dia","boa tarde","boa noite","menu","iniciar","start"];
     const step = getStep(to);
 
-    // ======= SUBMENU FINANCEIRO =======
-    if (step === "financeiro_menu") {
-      if (text === "1" || text.includes("segunda via")) {
-        await iniciarSegundaVia(to);
-        return;
-      } else if (text === "2" || text.includes("comprovante")) {
-        await iniciarComprovante(to);
-        return;
-      } else if (text === "3") {
-        await sendText(to, "🔁 Negociação/atualização – em breve. Digite *4* para atendente.");
-        clearStep(to);
-        return;
-      } else if (text === "9") {
-        clearStep(to);
-        await boasVindas(to, profileName);
-        return;
-      } else {
-        await sendText(to, "Não entendi. " + menuFinanceiro());
-        return;
-      }
+    // ======= PLANOS: tratar submenu =======
+    if (step === "planos_menu") {
+      if (text === "9")  { clearStep(to); await boasVindas(to, profileName); return; }
+      if (text === "10") { clearStep(to); await handoff(to); return; }
+      if (text === "0")  { await endChat(to); return; }
+      if (TIPOS_VEICULO[text]) { await planosPedirFormulario(to, TIPOS_VEICULO[text]); return; }
+      await sendText(to, "Não entendi. Escolha uma opção válida:\n\n" + menuPlanos()); return;
+    }
+    if (step === "planos_form") {
+      if (text === "9")  { clearStep(to); await boasVindas(to, profileName); return; }
+      if (text === "10") { clearStep(to); await handoff(to); return; }
+      if (text === "0")  { await endChat(to); return; }
+      await planosProcessarFormulario(to, rawText); return;
     }
 
-    // ======= Segunda via: coletar identificador e responder + template =======
+    // ======= SUPORTE: menu principal do suporte =======
+    if (step === "suporte_menu") {
+      if (text === "1" || text.includes("acessar")) { await suporteAcessoApp(to); return; }
+      if (text === "2" || text.includes("offline") || text.includes("off-line")) { await suporteVeiculoOffline(to); return; }
+      if (text === "3" || text.includes("esqueci")) { await suporteEsqueciAcessoIntro(to); return; }
+      if (text === "4" || text.includes("cancelar")) { await suporteCancelarServico(to); return; }
+      if (text === "5") { clearStep(to); await boasVindas(to, profileName); return; }
+      if (text === "9") { clearStep(to); await handoff(to); return; }
+      if (text === "0") { await endChat(to); return; }
+      await sendText(to, "Não entendi. Escolha uma opção válida:\n\n" + menuSuporte()); return;
+    }
+    if (step === "suporte_recuperacao") {
+      if (text === "5") { clearStep(to); await fluxoSuporteIntro(to); return; }
+      if (text === "9") { clearStep(to); await handoff(to); return; }
+      if (text === "0") { await endChat(to); return; }
+      await suporteEsqueciAcessoProcessar(to, rawText); return;
+    }
+
+    // ======= FINANCEIRO =======
+    if (step === "financeiro_menu") {
+      if (text === "1" || text.includes("segunda via")) { await iniciarSegundaVia(to); return; }
+      if (text === "2" || text.includes("comprovante")) { await iniciarComprovante(to); return; }
+      if (text === "3") {
+        await sendText(to, "🔁 Negociação/atualização – em breve. Digite *4* para atendente.");
+        clearStep(to); return;
+      }
+      if (text === "9") { clearStep(to); await boasVindas(to, profileName); return; }
+      await sendText(to, "Não entendi. " + menuFinanceiro()); return;
+    }
     if (step === "financeiro_segundavia") {
       if (asaas) {
         const onlyDigits = rawText.replace(/\D/g, "");
         const isCPFouCNPJ = onlyDigits.length >= 11 && onlyDigits.length <= 14;
         const isEmail = rawText.includes("@") && rawText.includes(".");
-        if (!isCPFouCNPJ && !isEmail) {
-          await sendText(to, "Por favor, informe *CPF/CNPJ* (11–14 dígitos) ou *e-mail* válido.");
-          return;
-        }
+        if (!isCPFouCNPJ && !isEmail) { await sendText(to, "Por favor, informe *CPF/CNPJ* (11–14 dígitos) ou *e-mail* válido."); return; }
         try {
-          const cust = await findCustomer({
-            cpfCnpj: isCPFouCNPJ ? rawText : undefined,
-            email: isEmail ? rawText : undefined
-          });
-          if (!cust) {
-            await sendText(to, "Não encontrei cadastro no Asaas com esse CPF/CNPJ ou e-mail. Tente novamente ou digite *4* para atendente.");
-            return;
-          }
+          const cust = await findCustomer({ cpfCnpj: isCPFouCNPJ ? rawText : undefined, email: isEmail ? rawText : undefined });
+          if (!cust) { await sendText(to, "Não encontrei cadastro no Asaas com esse CPF/CNPJ ou e-mail. Tente novamente ou digite *4* para atendente."); return; }
 
-          // mensagem em texto (lista)
           const msgOut = await buildSecondCopyMessage(cust.id);
           await sendText(to, msgOut);
 
-          // envio de templates por fatura
           try {
             const payments = await listOpenPayments(cust.id);
             const nomeCliente = cust.name || profileName || "Cliente";
@@ -378,66 +489,42 @@ app.post("/webhook", async (req, res) => {
               const valorBR = (typeof p.value === "number") ? p.value.toFixed(2).replace(".", ",") : String(p.value || "");
               let url = p.bankSlipUrl || p.invoiceUrl || "";
               if (!url && p.billingType === "PIX") {
-                try {
-                  const { data: pix } = await asaas.get(`/payments/${p.id}/pixQrCode`);
-                  url = pix.payload || "";
-                } catch (_) {}
+                try { const { data: pix } = await asaas.get(`/payments/${p.id}/pixQrCode`); url = pix.payload || ""; } catch (_) {}
               }
               if (url) {
-                await sendTemplateSegundaVia(to, {
-                  nome: nomeCliente,
-                  faturaId: p.id,
-                  vencimentoBR,
-                  valorBR,
-                  url
-                });
+                await sendTemplateSegundaVia(to, { nome: nomeCliente, faturaId: p.id, vencimentoBR, valorBR, url });
               }
             }
-          } catch (e) {
-            console.error("Falha ao enviar template segunda via:", e?.response?.data || e);
-          }
+          } catch (e) { console.error("Falha ao enviar template segunda via:", e?.response?.data || e); }
 
-          clearStep(to);
-          return;
+          clearStep(to); return;
         } catch (e) {
           console.error(e?.response?.data || e);
           await sendText(to, "Tive um problema para consultar agora. Tente novamente em instantes.");
-          clearStep(to);
-          return;
+          clearStep(to); return;
         }
       } else {
         await sendText(to, "Integração Asaas não configurada. Defina *ASAAS_API_KEY*.");
-        clearStep(to);
-        return;
+        clearStep(to); return;
       }
     }
-
-    // ======= Comprovante: pedir ID, receber arquivo e registrar =======
-    if (getStep(to) === "financeiro_comprovante_ask_id") {
+    if (step === "financeiro_comprovante_ask_id") {
       if (!rawText) { await sendText(to, "Por favor, informe o *ID/Nº da fatura* (ex.: #RS-2025-1234)."); return; }
-      await confirmarFaturaId(to, rawText);
-      return;
+      await confirmarFaturaId(to, rawText); return;
     }
-
-    if (getStep(to) === "financeiro_comprovante_wait_file") {
+    if (step === "financeiro_comprovante_wait_file") {
       const sess = sessions[to] || {};
       const faturaId = sess.faturaId || "N/D";
-
-      // mídia: imagem ou documento
       const midia =
         msg?.image ? { id: msg.image.id, mime: msg.image.mime_type, nome: `comprovante_${faturaId}.jpg` } :
         msg?.document ? { id: msg.document.id, mime: msg.document.mime_type, nome: msg.document.filename || `comprovante_${faturaId}.pdf` } :
         null;
 
-      if (!midia) {
-        await sendText(to, "Envie o *arquivo do comprovante* como *imagem* (foto/print) ou *documento PDF*.");
-        return;
-      }
+      if (!midia) { await sendText(to, "Envie o *arquivo do comprovante* como *imagem* (foto/print) ou *documento PDF*."); return; }
 
       try {
         const { buffer, contentType } = await obterUrlMidia(midia.id);
         const filename = midia.nome || `comprovante_${faturaId}`;
-
         const registroTxt =
 `Comprovante recebido via WhatsApp
 Empresa: ${COMPANY_NAME}
@@ -445,33 +532,20 @@ Fatura: ${faturaId}
 Remetente (WhatsApp): ${to}
 Data: ${new Date().toLocaleString("pt-BR")}`;
 
-        // 1) tentar e-mail
         let enviado = false;
         if (mailer) {
-          try {
-            await enviarComprovante(MAIL_TO, `[Comprovante] ${faturaId} - ${COMPANY_NAME}`, registroTxt, filename, buffer);
-            enviado = true;
-          } catch (e) {
-            console.error("Falha e-mail:", e?.response?.data || e);
-          }
+          try { await enviarComprovante(MAIL_TO, `[Comprovante] ${faturaId} - ${COMPANY_NAME}`, registroTxt, filename, buffer); enviado = true; }
+          catch (e) { console.error("Falha e-mail:", e?.response?.data || e); }
         }
-        // 2) tentar webhook
         if (!enviado && PROVAS_WEBHOOK_URL) {
           try {
             const base64 = buffer.toString("base64");
             await postarComprovanteWebhook(PROVAS_WEBHOOK_URL, {
-              company: COMPANY_NAME,
-              faturaId,
-              from: to,
-              contentType,
-              filename,
-              receivedAt: new Date().toISOString(),
-              fileBase64: base64
+              company: COMPANY_NAME, faturaId, from: to, contentType, filename,
+              receivedAt: new Date().toISOString(), fileBase64: base64
             });
             enviado = true;
-          } catch (e) {
-            console.error("Falha webhook:", e?.response?.data || e);
-          }
+          } catch (e) { console.error("Falha webhook:", e?.response?.data || e); }
         }
 
         if (enviado) {
@@ -479,32 +553,38 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
         } else {
           await sendText(to, `Recebi o seu arquivo, mas *não consegui registrar automaticamente* agora.\nEnvie por e-mail: ${SUPPORT_EMAIL} ou tente novamente mais tarde.`);
         }
-
-        clearStep(to);
-        return;
+        clearStep(to); return;
       } catch (e) {
         console.error("Erro ao processar mídia:", e?.response?.data || e);
         await sendText(to, "Não consegui processar o arquivo agora. Tente novamente ou envie por e-mail.");
-        clearStep(to);
-        return;
+        clearStep(to); return;
       }
     }
 
-    // ======= FLUXO PADRÃO =======
+    // ======= FLUXO PADRÃO (menu principal) =======
     if (chamaMenu.some(k => text.startsWith(k))) {
-      clearStep(to);
-      await boasVindas(to, profileName);
-    } else if (text === "1" || text.includes("orçamento") || text.includes("orcamento")) {
-      clearStep(to);
-      await fluxoOrcamento(to);
+      clearStep(to); await boasVindas(to, profileName);
+
+    } else if (
+      text === "1" ||
+      text.includes("plano") || text.includes("planos") ||
+      text.includes("preço") || text.includes("preços") ||
+      text.includes("preco") || text.includes("precos")
+    ) {
+      await fluxoPlanosIntro(to);
+
     } else if (text === "2" || text.includes("suporte")) {
-      clearStep(to);
-      await fluxoSuporte(to);
+      await fluxoSuporteIntro(to);
+
     } else if (text === "3" || text.includes("financeiro")) {
       await fluxoFinanceiroIntro(to);
-    } else if (text === "4" || text.includes("outros") || text.includes("atendente") || text.includes("humano")) {
-      clearStep(to);
-      await handoff(to);
+
+    } else if (text === "4" || text.includes("atendente") || text.includes("humano")) {
+      clearStep(to); await handoff(to);
+
+    } else if (text === "0") {
+      await endChat(to);
+
     } else {
       await sendText(to, `Entendi sua mensagem 👌\n${menuPrincipal()}`);
     }
@@ -512,6 +592,25 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
     console.error("Erro no webhook:", e?.response?.data || e);
   }
 });
+
+// ======== BOAS-VINDAS / Handoff ========
+async function boasVindas(to, nomeGuess) {
+  await sendText(to,
+`Olá${nomeGuess ? `, ${nomeGuess}` : ""}! 👋 Sou o assistente virtual da *${COMPANY_NAME}*.
+
+${menuPrincipal()}
+
+🕒 Horário: ${ATENDDIAS}, ${ATENDINICIO}–${ATENDFIM}.
+📍 Endereço: ${COMPANY_ADDRESS}
+💳 Pagamentos: ${PAYMENT_METHODS}
+📞 Suporte: ${SUPPORT_WHATS} | ✉️ ${SUPPORT_EMAIL}
+
+Digite *menu* a qualquer momento.`);
+}
+async function handoff(to) {
+  await sendText(to, "👩‍💼 Ok! Vou transferir para um atendente humano. Aguarde um instante.");
+  // aqui você pode notificar seu time por e-mail/Slack/WhatsApp interno
+}
 
 // porta
 app.listen(process.env.PORT || 3000, () => console.log("Bot online"));

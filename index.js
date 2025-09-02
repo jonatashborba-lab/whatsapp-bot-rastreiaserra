@@ -31,15 +31,15 @@ const asaas = ASAAS_API_KEY
 
 // === E-MAIL (opcional p/ comprovantes) ===
 const SMTP_HOST = process.env.SMTP_HOST || "";
-theSMTPPORT = Number(process.env.SMTP_PORT || "587");
+const SMTP_PORT = Number(process.env.SMTP_PORT || "587");
 const SMTP_USER = process.env.SMTP_USER || "";
 const SMTP_PASS = process.env.SMTP_PASS || "";
 const MAIL_TO   = process.env.MAIL_TO   || "financeiro@rastreiaserra.com.br"; // destino p/ comprovantes
 const mailer = (SMTP_HOST && SMTP_USER && SMTP_PASS)
   ? nodemailer.createTransport({
       host: SMTP_HOST,
-      port: theSMTPPORT,
-      secure: theSMTPPORT === 465,
+      port: SMTP_PORT,
+      secure: SMTP_PORT === 465,
       auth: { user: SMTP_USER, pass: SMTP_PASS }
     })
   : null;
@@ -960,6 +960,56 @@ app.post("/webhook/asaas", async (req, res) => {
     console.error("Erro /webhook/asaas:", e?.response?.data || e);
   }
 });
+
+/* =========================
+   PÁGINAS LEGAIS (Privacy/Terms/Data Deletion)
+   ========================= */
+function sendHtml(res, html) {
+  res.set("Content-Type","text/html; charset=utf-8").send(html);
+}
+
+app.get("/privacy", (req, res) => sendHtml(res, `<!doctype html><meta charset="utf-8">
+<title>Política de Privacidade - ${COMPANY_NAME}</title>
+<style>body{font-family:system-ui,Arial,sans-serif;max-width:860px;margin:40px auto;padding:0 16px;line-height:1.6}h1,h2{line-height:1.25}</style>
+<h1>Política de Privacidade</h1>
+<p>Esta Política descreve como a <b>${COMPANY_NAME}</b> trata dados pessoais no atendimento via WhatsApp e integrações (ex.: Asaas).</p>
+<h2>Dados coletados</h2>
+<ul><li>Número de WhatsApp (wa_id), nome de perfil e mensagens.</li><li>Dados de cobrança quando necessário (CPF/CNPJ, e-mail, faturas/links Asaas).</li><li>Metadados técnicos (IP, data/horário, logs) para segurança/operacionalização.</li></ul>
+<h2>Finalidades</h2>
+<ul><li>Atendimento, suporte e rotinas financeiras (2ª via, comprovantes).</li><li>Segurança, prevenção a fraudes, auditoria e obrigações legais.</li></ul>
+<h2>Bases legais (LGPD)</h2>
+<ul><li>Execução de contrato e procedimentos preliminares;</li><li>Cumprimento de obrigação legal;</li><li>Legítimo interesse;</li><li>Consentimento (quando aplicável).</li></ul>
+<h2>Compartilhamento</h2>
+<ul><li>Meta/WhatsApp Cloud API, Asaas, provedores de infraestrutura (ex.: Render) e e-mail (quando usado).</li></ul>
+<h2>Retenção</h2><p>Pelo tempo necessário ao atendimento, obrigações legais e defesa de direitos.</p>
+<h2>Direitos do titular</h2><p>Acesso, correção, portabilidade, anonimização/exclusão e informações sobre uso/compartilhamento.</p>
+<h2>Contato</h2><p>E-mail: <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p>
+<h2>Atualizações</h2><p>Podemos atualizar esta Política a qualquer momento; consulte esta página.</p>`)));
+
+app.get("/terms", (req, res) => sendHtml(res, `<!doctype html><meta charset="utf-8">
+<title>Termos de Uso - ${COMPANY_NAME}</title>
+<style>body{font-family:system-ui,Arial,sans-serif;max-width:860px;margin:40px auto;padding:0 16px;line-height:1.6}h1,h2{line-height:1.25}</style>
+<h1>Termos de Uso</h1>
+<p>Estes Termos regem o uso do atendimento via WhatsApp oferecido por <b>${COMPANY_NAME}</b>.</p>
+<h2>Uso aceitável</h2>
+<ul><li>Proibido spam, conteúdo ilícito/ofensivo e automações não autorizadas.</li><li>Podemos bloquear o uso em caso de abuso.</li></ul>
+<h2>Mensagens e templates</h2><p>Utilizamos modelos aprovados pela Meta para cobranças, lembretes e recibos.</p>
+<h2>Disponibilidade</h2><p>Pode haver indisponibilidade por manutenção, instabilidades de terceiros ou força maior.</p>
+<h2>Preços</h2><p>Valores informados via chat são indicativos; prevalece a proposta/contrato.</p>
+<h2>Privacidade</h2><p>Veja a <a href="/privacy">Política de Privacidade</a>.</p>
+<h2>Contato</h2><p>E-mail: <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p>
+<h2>Foro</h2><p>Foro de Caxias do Sul/RS.</p>`)));
+
+app.get("/data-deletion", (req, res) => sendHtml(res, `<!doctype html><meta charset="utf-8">
+<title>Exclusão de Dados - ${COMPANY_NAME}</title>
+<style>body{font-family:system-ui,Arial,sans-serif;max-width:860px;margin:40px auto;padding:0 16px;line-height:1.6}h1,h2{line-height:1.25}</style>
+<h1>Exclusão de Dados</h1>
+<ol>
+  <li>Envie um e-mail para <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a> com assunto “Exclusão de Dados – WhatsApp”.</li>
+  <li>Informe seu número de WhatsApp, nome/razão social e identificadores de cobrança (se houver).</li>
+  <li>Responderemos em até 15 dias úteis com a confirmação ou justificativa legal para retenção.</li>
+</ol>
+<p>Alguns registros podem ser mantidos pelo prazo legal mínimo.</p>`)));
 
 /* ======================
    SERVIDOR

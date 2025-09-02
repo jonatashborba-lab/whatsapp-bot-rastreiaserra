@@ -1,63 +1,82 @@
 // index.js
 const express = require("express");
-const bodyParser = require("body-parser");
 const axios = require("axios");
 const nodemailer = require("nodemailer");
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
-// === VARIÁVEIS DE AMBIENTE (obrigatórias) ===
-const VERIFY_TOKEN    = process.env.VERIFY_TOKEN || "meu_token_de_verificacao";
-const WHATS_TOKEN     = process.env.WHATS_TOKEN;           // Token Cloud API
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;       // ID numérico do número WhatsApp
-const ATENDINICIO     = process.env.ATENDINICIO || "08:30";
-const ATENDFIM        = process.env.ATENDFIM    || "18:00";
-const ATENDDIAS       = process.env.ATENDDIAS   || "Seg a Sex";
+// ========================
+// Config & Variáveis de Ambiente
+// ========================
+const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION || "v20.0";
 
-// === DADOS DA EMPRESA (fixos, personalizados) ===
+const {
+  VERIFY_TOKEN,
+  WHATS_TOKEN,
+  PHONE_NUMBER_ID,
+  ATENDINICIO = "08:30",
+  ATENDFIM = "18:00",
+  ATENDDIAS = "Seg a Sex",
+
+  ASAAS_API_KEY = "",
+  ASAAS_BASE = "https://api.asaas.com/v3",
+  ASAAS_WEBHOOK_TOKEN = "",
+
+  SMTP_HOST = "",
+  SMTP_PORT: SMTP_PORT_STR = "587",
+  SMTP_USER = "",
+  SMTP_PASS = "",
+  MAIL_TO = "financeiro@rastreiaserra.com.br",
+
+  PROVAS_WEBHOOK_URL = "",
+  PORT: PORT_STR = "3000",
+} = process.env;
+
+if (!WHATS_TOKEN || !PHONE_NUMBER_ID || !VERIFY_TOKEN) {
+  throw new Error("Defina WHATS_TOKEN, PHONE_NUMBER_ID e VERIFY_TOKEN nas variáveis de ambiente.");
+}
+
+const SMTP_PORT = Number(SMTP_PORT_STR);
+const PORT = Number(PORT_STR);
+
+// ========================
+// Dados fixos da empresa
+// ========================
 const COMPANY_NAME    = "RASTREIA SERRA RASTREAMENTO VEICULAR";
 const COMPANY_ADDRESS = "Rua Maestro João Cosner, 376 – Cidade Nova – Caxias do Sul/RS";
 const PAYMENT_METHODS = "Cartão de crédito/débito, Pix, boleto e dinheiro";
 const SUPPORT_WHATS   = "54 98401-1516";
 const SUPPORT_EMAIL   = "rastreiaserra@outlook.com";
 
-// === ASAAS (opcional p/ cobranças/segunda via) ===
-const ASAAS_API_KEY   = process.env.ASAAS_API_KEY || "";
-const ASAAS_BASE      = process.env.ASAAS_BASE || "https://api.asaas.com/v3";
+// ========================
+// Clientes externos (Asaas, SMTP)
+// ========================
 const asaas = ASAAS_API_KEY
   ? axios.create({ baseURL: ASAAS_BASE, headers: { "access_token": ASAAS_API_KEY } })
   : null;
 
-// === E-MAIL (opcional p/ comprovantes) ===
-const SMTP_HOST = process.env.SMTP_HOST || "";
-theSMTPPORT = Number(process.env.SMTP_PORT || "587");
-const SMTP_USER = process.env.SMTP_USER || "";
-const SMTP_PASS = process.env.SMTP_PASS || "";
-const MAIL_TO   = process.env.MAIL_TO   || "financeiro@rastreiaserra.com.br"; // destino p/ comprovantes
 const mailer = (SMTP_HOST && SMTP_USER && SMTP_PASS)
   ? nodemailer.createTransport({
       host: SMTP_HOST,
-      port: theSMTPPORT,
-      secure: theSMTPPORT === 465,
+      port: SMTP_PORT,
+      secure: SMTP_PORT === 465,
       auth: { user: SMTP_USER, pass: SMTP_PASS }
     })
   : null;
 
-// === WEBHOOK externo (opcional p/ comprovantes) ===
-const PROVAS_WEBHOOK_URL = process.env.PROVAS_WEBHOOK_URL || "";
-
-// Proteção simples do webhook Asaas
-const ASAAS_WEBHOOK_TOKEN = process.env.ASAAS_WEBHOOK_TOKEN || "";
-
-// ======== STATE (memória simples por número) ========
+// ========================
+// State em memória (simples)
+// ========================
 const sessions = Object.create(null);
 // sessions[to] = { step, faturaId?, protocolo?, tipo?, fbScore? }
 function setStep(to, step) { sessions[to] = { ...(sessions[to]||{}), step }; }
 function getStep(to) { return sessions[to]?.step || null; }
 function clearStep(to) { delete sessions[to]; }
 
-// ======== HELPERS =========
+// ========================
+// Helpers utilitários
+// ========================
 function protocolo() {
   const now = new Date();
   const n = Math.floor(Math.random() * 9000) + 1000;
@@ -71,169 +90,187 @@ function extractAsaasCodeFromUrl(url) {
   const m = String(url).match(/\/i\/([^/?#]+)/i);
   return m ? m[1] : "";
 }
+const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
-// envia texto (sempre sanitizando o número)
+// ========================
+// Envio WhatsApp (Cloud API)
+// ========================
 async function sendText(to, text) {
   to = onlyDigits(to);
   if (!to) return;
-  await axios.post(
-    `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
-    { messaging_product: "whatsapp", to, type: "text", text: { body: text } },
-    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } }
-  );
+  try {
+    await axios.post(
+      `https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`,
+      { messaging_product: "whatsapp", to, type: "text", text: { body: text } },
+      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } }
+    );
+  } catch (e) {
+    console.error("sendText fail:", e?.response?.data || e?.message || e);
+  }
 }
-
-/* ===============================
-   TEMPLATES (4 principais) + 2ª via
-   =============================== */
 
 // 1) Cobrança nova (link no corpo) — template: cobranca_nova_v2
 async function sendTemplateCobrancaNova(to, { nome, descricao, valorBR, vencimentoBR, link }) {
-  to = onlyDigits(to);
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "template",
-    template: {
-      name: "cobranca_nova_v2",
-      language: { code: "pt_BR" },
-      components: [{
-        type: "body",
-        parameters: [
-          { type: "text", text: nome || "Cliente" },      // {{1}}
-          { type: "text", text: descricao || "Cobrança" },// {{2}}
-          { type: "text", text: valorBR || "" },          // {{3}}
-          { type: "text", text: vencimentoBR || "" },     // {{4}}
-          { type: "text", text: link || "" }              // {{5}}
-        ]
-      }]
-    }
-  };
-  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
-    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+  try {
+    to = onlyDigits(to);
+    const payload = {
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: "cobranca_nova_v2",
+        language: { code: "pt_BR" },
+        components: [{
+          type: "body",
+          parameters: [
+            { type: "text", text: nome || "Cliente" },      // {{1}}
+            { type: "text", text: descricao || "Cobrança" },// {{2}}
+            { type: "text", text: valorBR || "" },          // {{3}}
+            { type: "text", text: vencimentoBR || "" },     // {{4}}
+            { type: "text", text: link || "" }              // {{5}}
+          ]
+        }]
+      }
+    };
+    await axios.post(`https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`, payload,
+      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+  } catch (e) {
+    console.error("sendTemplateCobrancaNova fail:", e?.response?.data || e?.message || e);
+  }
 }
 
 // 2) Lembrete de vencimento — template: lembrete_vencimento_v1 (botão URL com sufixo {{1}})
 async function sendTemplateLembreteVencimento(to, { nome, descricao, valorBR, vencimentoBR, linkCode }) {
-  to = onlyDigits(to);
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "template",
-    template: {
-      name: "lembrete_vencimento_v1",
-      language: { code: "pt_BR" },
-      components: [
-        {
-          type: "body",
-          parameters: [
-            { type: "text", text: nome || "Cliente" },       // {{1}}
-            { type: "text", text: descricao || "Cobrança" }, // {{2}}
-            { type: "text", text: valorBR || "" },           // {{3}}
-            { type: "text", text: vencimentoBR || "" }       // {{4}}
-          ]
-        },
-        {
-          type: "button",
-          sub_type: "url",
-          index: "0",
-          parameters: [{ type: "text", text: linkCode || "" }]
-        }
-      ]
-    }
-  };
-  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
-    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+  try {
+    to = onlyDigits(to);
+    const payload = {
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: "lembrete_vencimento_v1",
+        language: { code: "pt_BR" },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: nome || "Cliente" },       // {{1}}
+              { type: "text", text: descricao || "Cobrança" }, // {{2}}
+              { type: "text", text: valorBR || "" },           // {{3}}
+              { type: "text", text: vencimentoBR || "" }       // {{4}}
+            ]
+          },
+          {
+            type: "button",
+            sub_type: "url",
+            index: "0",
+            parameters: [{ type: "text", text: linkCode || "" }]
+          }
+        ]
+      }
+    };
+    await axios.post(`https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`, payload,
+      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+  } catch (e) {
+    console.error("sendTemplateLembreteVencimento fail:", e?.response?.data || e?.message || e);
+  }
 }
 
-// 3) Cobrança em atraso — template: cobranca_atraso_v1 (botão URL + quick reply)
+// 3) Cobrança em atraso — template: cobranca_atraso_v1 (URL button dinâmico; quick_reply sem parâmetros no payload!)
 async function sendTemplateCobrancaAtraso(to, { nome, descricao, valorBR, vencimentoBR, linkCode }) {
-  to = onlyDigits(to);
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "template",
-    template: {
-      name: "cobranca_atraso_v1",
-      language: { code: "pt_BR" },
-      components: [
-        {
-          type: "body",
-          parameters: [
-            { type: "text", text: nome || "Cliente" },       // {{1}}
-            { type: "text", text: descricao || "Cobrança" }, // {{2}}
-            { type: "text", text: valorBR || "" },           // {{3}}
-            { type: "text", text: vencimentoBR || "" }       // {{4}}
-          ]
-        },
-        {
-          type: "button",
-          sub_type: "url",
-          index: "0",
-          parameters: [{ type: "text", text: linkCode || "" }]
-        },
-        {
-          type: "button",
-          sub_type: "quick_reply",
-          index: "1",
-          parameters: [{ type: "payload", payload: "AJUDA_COBRANCA" }]
-        }
-      ]
-    }
-  };
-  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
-    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+  try {
+    to = onlyDigits(to);
+    const payload = {
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: "cobranca_atraso_v1",
+        language: { code: "pt_BR" },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: nome || "Cliente" },       // {{1}}
+              { type: "text", text: descricao || "Cobrança" }, // {{2}}
+              { type: "text", text: valorBR || "" },           // {{3}}
+              { type: "text", text: vencimentoBR || "" }       // {{4}}
+            ]
+          },
+          // URL button dinâmico (permitido); NÃO incluir quick_reply aqui com parameters
+          {
+            type: "button",
+            sub_type: "url",
+            index: "0",
+            parameters: [{ type: "text", text: linkCode || "" }]
+          }
+        ]
+      }
+    };
+    await axios.post(`https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`, payload,
+      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+  } catch (e) {
+    console.error("sendTemplateCobrancaAtraso fail:", e?.response?.data || e?.message || e);
+  }
 }
 
 // 4) Pagamento confirmado — template: pagamento_confirmado_v1
 async function sendTemplatePagamentoConfirmado(to, { nome, descricao, valorBR, dataPagamentoBR }) {
-  to = onlyDigits(to);
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "template",
-    template: {
-      name: "pagamento_confirmado_v1",
-      language: { code: "pt_BR" },
-      components: [{
-        type: "body",
-        parameters: [
-          { type: "text", text: nome || "Cliente" },             // {{1}}
-          { type: "text", text: descricao || "Cobrança" },       // {{2}}
-          { type: "text", text: valorBR || "" },                 // {{3}}
-          { type: "text", text: dataPagamentoBR || "" }          // {{4}}
-        ]
-      }]
-    }
-  };
-  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
-    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+  try {
+    to = onlyDigits(to);
+    const payload = {
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: "pagamento_confirmado_v1",
+        language: { code: "pt_BR" },
+        components: [{
+          type: "body",
+          parameters: [
+            { type: "text", text: nome || "Cliente" },             // {{1}}
+            { type: "text", text: descricao || "Cobrança" },       // {{2}}
+            { type: "text", text: valorBR || "" },                 // {{3}}
+            { type: "text", text: dataPagamentoBR || "" }          // {{4}}
+          ]
+        }]
+      }
+    };
+    await axios.post(`https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`, payload,
+      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+  } catch (e) {
+    console.error("sendTemplatePagamentoConfirmado fail:", e?.response?.data || e?.message || e);
+  }
 }
 
 // (extra) Segunda via — template: segunda_via_fatura
 async function sendTemplateSegundaVia(to, { nome, faturaId, vencimentoBR, valorBR, url }) {
-  to = onlyDigits(to);
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "template",
-    template: {
-      name: "segunda_via_fatura",   // nome APROVADO
-      language: { code: "pt_BR" },
-      components: [{
-        type: "body",
-        parameters: [
-          { type: "text", text: nome || "" },
-          { type: "text", text: faturaId || "" },
-          { type: "text", text: vencimentoBR || "" },
-          { type: "text", text: valorBR || "" },
-          { type: "text", text: url || "" }
-        ]
-      }]
-    }
-  };
-  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
-    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+  try {
+    to = onlyDigits(to);
+    const payload = {
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: "segunda_via_fatura",   // nome APROVADO
+        language: { code: "pt_BR" },
+        components: [{
+          type: "body",
+          parameters: [
+            { type: "text", text: nome || "" },
+            { type: "text", text: faturaId || "" },
+            { type: "text", text: vencimentoBR || "" },
+            { type: "text", text: valorBR || "" },
+            { type: "text", text: url || "" }
+          ]
+        }]
+      }
+    };
+    await axios.post(`https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`, payload,
+      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+  } catch (e) {
+    console.error("sendTemplateSegundaVia fail:", e?.response?.data || e?.message || e);
+  }
 }
 
 /* ===========================================
@@ -422,6 +459,7 @@ function menuFinanceiro() {
 2️⃣ Enviar comprovante de pagamento
 3️⃣ Negociação/atualização de boleto ou PIX (em breve)
 9️⃣ Voltar ao menu principal
+0️⃣ Encerrar atendimento
 
 Envie o número da opção.`
   );
@@ -536,7 +574,7 @@ async function confirmarFaturaId(to, rawText) {
   await sendText(to, `Perfeito! Agora *envie o arquivo* do comprovante (foto/print ou PDF) referente à fatura *${faturaId}*.`);
 }
 async function obterUrlMidia(mediaId) {
-  const meta = await axios.get(`https://graph.facebook.com/v20.0/${mediaId}`, {
+  const meta = await axios.get(`https://graph.facebook.com/${GRAPH_API_VERSION}/${mediaId}`, {
     headers: { Authorization: `Bearer ${WHATS_TOKEN}` }
   });
   const url = meta.data?.url;
@@ -633,8 +671,11 @@ app.post("/webhook", async (req, res) => {
     const chamaMenu = ["oi","olá","ola","bom dia","boa tarde","boa noite","menu","iniciar","start"];
     const step = getStep(to);
 
-    // Quick reply do template de atraso
-    if (type === "button" && msg?.button?.payload === "AJUDA_COBRANCA") {
+    // Quick reply vindo de template (type=button) OU interactive (button_reply.id)
+    if (
+      (type === "button" && /ajuda|atendente/i.test(msg?.button?.text || "")) ||
+      (type === "interactive" && msg?.interactive?.button_reply?.id === "AJUDA_COBRANCA")
+    ) {
       await handoff(to);
       return;
     }
@@ -721,6 +762,7 @@ app.post("/webhook", async (req, res) => {
         clearStep(to); return;
       }
       if (text === "9") { clearStep(to); await boasVindas(to, profileName); return; }
+      if (text === "0") { await endChat(to); return; }
       await sendText(to, "Não entendi. " + menuFinanceiro()); return;
     }
     if (step === "financeiro_segundavia") {
@@ -736,10 +778,12 @@ app.post("/webhook", async (req, res) => {
           const msgOut = await buildSecondCopyMessage(cust.id);
           await sendText(to, msgOut);
 
+          // Envio estruturado (limite defensivo + pequeno intervalo)
           try {
             const payments = await listOpenPayments(cust.id);
             const nomeCliente = cust.name || profileName || "Cliente";
-            for (const p of payments) {
+            for (const p of payments.slice(0, 5)) {
+              await delay(350);
               const vencimentoBR = p.dueDate ? new Date(p.dueDate).toLocaleDateString("pt-BR") : "";
               const valorBR = (typeof p.value === "number") ? p.value.toFixed(2).replace(".", ",") : String(p.value || "");
               let url = p.bankSlipUrl || p.invoiceUrl || "";
@@ -908,7 +952,18 @@ app.post("/webhook/asaas", async (req, res) => {
 
     const status = p.status || ""; // PENDING, OVERDUE, RECEIVED, CONFIRMED...
     const customerId = p.customer || "";
-    const nome = p.customer?.name || "Cliente";
+    let nome = "Cliente";
+
+    // Tenta extrair nome do cliente
+    if (typeof p.customer === "object" && p.customer?.name) {
+      nome = p.customer.name;
+    } else if (asaas && customerId) {
+      try {
+        const { data: cust } = await asaas.get(`/customers/${customerId}`);
+        if (cust?.name) nome = cust.name;
+      } catch (e) { console.error("Asaas get customer fail:", e?.response?.data || e); }
+    }
+
     const descricao = p.description || "Cobrança";
     const valorBR = typeof p.value === "number" ? brl(p.value) : String(p.value || "");
     const vencimentoBR = p.dueDate ? dataBR(p.dueDate) : "";
@@ -928,7 +983,7 @@ app.post("/webhook/asaas", async (req, res) => {
     }
     if (!to) { console.log("Sem telefone para notificar."); return; }
 
-    // Extrai código curto do Asaas (para botões de URL)
+    // Extrai código curto do Asaas (para botão URL dinâmico)
     const linkCode = extractAsaasCodeFromUrl(link);
 
     // Atraso
@@ -966,4 +1021,4 @@ app.post("/webhook/asaas", async (req, res) => {
    ====================== */
 // endpoint leve só pra manter a instância acordada
 app.get("/health", (req, res) => res.status(200).send("ok"));
-app.listen(process.env.PORT || 3000, () => console.log("Bot online"));
+app.listen(PORT, () => console.log(`Bot online na porta ${PORT}`));

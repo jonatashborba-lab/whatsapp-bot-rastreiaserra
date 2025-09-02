@@ -964,4 +964,6 @@ app.post("/webhook/asaas", async (req, res) => {
 /* ======================
    SERVIDOR
    ====================== */
+// endpoint leve só pra manter a instância acordada
+app.get("/health", (req, res) => res.status(200).send("ok"));
 app.listen(process.env.PORT || 3000, () => console.log("Bot online"));

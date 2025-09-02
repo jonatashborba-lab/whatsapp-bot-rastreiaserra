@@ -22,7 +22,7 @@ const PAYMENT_METHODS = "Cartão de crédito/débito, Pix, boleto e dinheiro";
 const SUPPORT_WHATS   = "54 98401-1516";
 const SUPPORT_EMAIL   = "rastreiaserra@outlook.com";
 
-// === ASAAS (opcional p/ segunda via) ===
+// === ASAAS (opcional p/ cobranças/segunda via) ===
 const ASAAS_API_KEY   = process.env.ASAAS_API_KEY || "";
 const ASAAS_BASE      = process.env.ASAAS_BASE || "https://api.asaas.com/v3";
 const asaas = ASAAS_API_KEY
@@ -31,21 +31,24 @@ const asaas = ASAAS_API_KEY
 
 // === E-MAIL (opcional p/ comprovantes) ===
 const SMTP_HOST = process.env.SMTP_HOST || "";
-const SMTP_PORT = Number(process.env.SMTP_PORT || "587");
+theSMTPPORT = Number(process.env.SMTP_PORT || "587");
 const SMTP_USER = process.env.SMTP_USER || "";
 const SMTP_PASS = process.env.SMTP_PASS || "";
 const MAIL_TO   = process.env.MAIL_TO   || "financeiro@rastreiaserra.com.br"; // destino p/ comprovantes
 const mailer = (SMTP_HOST && SMTP_USER && SMTP_PASS)
   ? nodemailer.createTransport({
       host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_PORT === 465,
+      port: theSMTPPORT,
+      secure: theSMTPPORT === 465,
       auth: { user: SMTP_USER, pass: SMTP_PASS }
     })
   : null;
 
 // === WEBHOOK externo (opcional p/ comprovantes) ===
 const PROVAS_WEBHOOK_URL = process.env.PROVAS_WEBHOOK_URL || "";
+
+// Proteção simples do webhook Asaas
+const ASAAS_WEBHOOK_TOKEN = process.env.ASAAS_WEBHOOK_TOKEN || "";
 
 // ======== STATE (memória simples por número) ========
 const sessions = Object.create(null);
@@ -61,12 +64,18 @@ function protocolo() {
   return `RS-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}-${n}`;
 }
 function brl(n) { return `R$ ${Number(n).toFixed(2).replace('.', ',')}`; }
+function dataBR(d) { return new Date(d).toLocaleDateString("pt-BR"); }
+function onlyDigits(s) { return String(s||"").replace(/\D/g, ""); }
+function extractAsaasCodeFromUrl(url) {
+  if (!url) return "";
+  const m = String(url).match(/\/i\/([^/?#]+)/i);
+  return m ? m[1] : "";
+}
 
 // envia texto (sempre sanitizando o número)
 async function sendText(to, text) {
-  to = String(to || "").replace(/\D/g, "");
-  console.log(">> sendText() para:", to);
-
+  to = onlyDigits(to);
+  if (!to) return;
   await axios.post(
     `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
     { messaging_product: "whatsapp", to, type: "text", text: { body: text } },
@@ -74,38 +83,163 @@ async function sendText(to, text) {
   );
 }
 
-async function sendTemplateSegundaVia(to, { nome, faturaId, vencimentoBR, valorBR, url }) {
-  to = String(to || "").replace(/\D/g, "");
+/* ===============================
+   TEMPLATES (4 principais) + 2ª via
+   =============================== */
+
+// 1) Cobrança nova (link no corpo) — template: cobranca_nova_v2
+async function sendTemplateCobrancaNova(to, { nome, descricao, valorBR, vencimentoBR, link }) {
+  to = onlyDigits(to);
   const payload = {
     messaging_product: "whatsapp",
     to,
     type: "template",
     template: {
-      name: "segunda_via_fatura",   // nome do template APROVADO na sua conta
+      name: "cobranca_nova_v2",
+      language: { code: "pt_BR" },
+      components: [{
+        type: "body",
+        parameters: [
+          { type: "text", text: nome || "Cliente" },      // {{1}}
+          { type: "text", text: descricao || "Cobrança" },// {{2}}
+          { type: "text", text: valorBR || "" },          // {{3}}
+          { type: "text", text: vencimentoBR || "" },     // {{4}}
+          { type: "text", text: link || "" }              // {{5}}
+        ]
+      }]
+    }
+  };
+  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+}
+
+// 2) Lembrete de vencimento — template: lembrete_vencimento_v1 (botão URL com sufixo {{1}})
+async function sendTemplateLembreteVencimento(to, { nome, descricao, valorBR, vencimentoBR, linkCode }) {
+  to = onlyDigits(to);
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "template",
+    template: {
+      name: "lembrete_vencimento_v1",
       language: { code: "pt_BR" },
       components: [
         {
           type: "body",
           parameters: [
-            { type: "text", text: nome || "" },
-            { type: "text", text: faturaId || "" },
-            { type: "text", text: vencimentoBR || "" },
-            { type: "text", text: valorBR || "" },
-            { type: "text", text: url || "" }
+            { type: "text", text: nome || "Cliente" },       // {{1}}
+            { type: "text", text: descricao || "Cobrança" }, // {{2}}
+            { type: "text", text: valorBR || "" },           // {{3}}
+            { type: "text", text: vencimentoBR || "" }       // {{4}}
           ]
+        },
+        {
+          type: "button",
+          sub_type: "url",
+          index: "0",
+          parameters: [{ type: "text", text: linkCode || "" }]
         }
       ]
     }
   };
-
-  await axios.post(
-    `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,
-    payload,
-    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } }
-  );
+  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
 }
 
-// ======== MENUS ========
+// 3) Cobrança em atraso — template: cobranca_atraso_v1 (botão URL + quick reply)
+async function sendTemplateCobrancaAtraso(to, { nome, descricao, valorBR, vencimentoBR, linkCode }) {
+  to = onlyDigits(to);
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "template",
+    template: {
+      name: "cobranca_atraso_v1",
+      language: { code: "pt_BR" },
+      components: [
+        {
+          type: "body",
+          parameters: [
+            { type: "text", text: nome || "Cliente" },       // {{1}}
+            { type: "text", text: descricao || "Cobrança" }, // {{2}}
+            { type: "text", text: valorBR || "" },           // {{3}}
+            { type: "text", text: vencimentoBR || "" }       // {{4}}
+          ]
+        },
+        {
+          type: "button",
+          sub_type: "url",
+          index: "0",
+          parameters: [{ type: "text", text: linkCode || "" }]
+        },
+        {
+          type: "button",
+          sub_type: "quick_reply",
+          index: "1",
+          parameters: [{ type: "payload", payload: "AJUDA_COBRANCA" }]
+        }
+      ]
+    }
+  };
+  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+}
+
+// 4) Pagamento confirmado — template: pagamento_confirmado_v1
+async function sendTemplatePagamentoConfirmado(to, { nome, descricao, valorBR, dataPagamentoBR }) {
+  to = onlyDigits(to);
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "template",
+    template: {
+      name: "pagamento_confirmado_v1",
+      language: { code: "pt_BR" },
+      components: [{
+        type: "body",
+        parameters: [
+          { type: "text", text: nome || "Cliente" },             // {{1}}
+          { type: "text", text: descricao || "Cobrança" },       // {{2}}
+          { type: "text", text: valorBR || "" },                 // {{3}}
+          { type: "text", text: dataPagamentoBR || "" }          // {{4}}
+        ]
+      }]
+    }
+  };
+  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+}
+
+// (extra) Segunda via — template: segunda_via_fatura
+async function sendTemplateSegundaVia(to, { nome, faturaId, vencimentoBR, valorBR, url }) {
+  to = onlyDigits(to);
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "template",
+    template: {
+      name: "segunda_via_fatura",   // nome APROVADO
+      language: { code: "pt_BR" },
+      components: [{
+        type: "body",
+        parameters: [
+          { type: "text", text: nome || "" },
+          { type: "text", text: faturaId || "" },
+          { type: "text", text: vencimentoBR || "" },
+          { type: "text", text: valorBR || "" },
+          { type: "text", text: url || "" }
+        ]
+      }]
+    }
+  };
+  await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, payload,
+    { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
+}
+
+/* ===========================================
+   MENUS / FLUXOS (principal, planos, suporte, financeiro)
+   =========================================== */
+
 function menuPrincipal() {
   return (
 `🤖 *Atendimento ${COMPANY_NAME}*
@@ -119,9 +253,8 @@ Envie o número da opção ou escreva seu pedido.`
   );
 }
 
-// ——— Planos e Preços ———
-const PRICE_MENSAL = 49.90;     // R$ por veículo/mês (1 a 3 veículos)
-const FEE_ADESAO   = 100.00;    // R$ por veículo (taxa única)
+const PRICE_MENSAL = 49.90; // R$ por veículo/mês (1 a 3)
+const FEE_ADESAO   = 100.00; // R$ por veículo
 
 function menuPlanos() {
   return (
@@ -274,7 +407,7 @@ async function suporteCancelarServico(to) {
   await sendText(to,
 `📬 *Cancelamento do serviço*
 Para solicitar o cancelamento, envie um e-mail informando o motivo para:
-✉️ *rastreiaserra@outlook.com*
+✉️ *${SUPPORT_EMAIL}*
 
 Depois de enviar o e-mail:
 • Digite *5* para retornar ao menu anterior
@@ -297,6 +430,50 @@ async function fluxoFinanceiroIntro(to) {
   await sendText(to, menuFinanceiro());
   setStep(to, "financeiro_menu");
 }
+
+// Asaas helpers
+async function ensureAsaasCustomer({ name, email, cpfCnpj, mobilePhone }) {
+  if (!asaas) throw new Error("Asaas não configurado (ASAAS_API_KEY).");
+  let params = {};
+  if (cpfCnpj) params.cpfCnpj = onlyDigits(cpfCnpj);
+  if (email && !params.cpfCnpj) params.email = String(email).trim().toLowerCase();
+
+  let found = null;
+  if (Object.keys(params).length) {
+    const { data } = await asaas.get("/customers", { params });
+    found = data?.data?.[0] || null;
+  }
+  if (found) return found;
+
+  const { data: created } = await asaas.post("/customers", {
+    name,
+    email,
+    cpfCnpj: cpfCnpj ? onlyDigits(cpfCnpj) : undefined,
+    mobilePhone: mobilePhone ? onlyDigits(mobilePhone) : undefined
+  });
+  return created;
+}
+async function createPaymentAndLink({ customerId, value, dueDate, billingType = "BOLETO", description = "", externalReference }) {
+  if (!asaas) throw new Error("Asaas não configurado (ASAAS_API_KEY).");
+  const { data: p } = await asaas.post("/payments", {
+    customer: customerId,
+    value: Number(value),
+    dueDate,                 // "YYYY-MM-DD"
+    billingType,             // "PIX" | "BOLETO" | "CREDIT_CARD"
+    description,
+    externalReference        // grave aqui o número WhatsApp do cliente (só dígitos)
+  });
+
+  let link = p.invoiceUrl || p.bankSlipUrl || "";
+  if (!link && p.billingType === "PIX") {
+    try {
+      const { data } = await asaas.get(`/payments/${p.id}/pixQrCode`);
+      link = data?.payload || "";
+    } catch {}
+  }
+  return { payment: p, link };
+}
+
 async function iniciarSegundaVia(to) {
   if (!asaas) {
     await sendText(to,
@@ -314,7 +491,7 @@ Ex.: 000.000.000-00  *ou*  cliente@empresa.com`);
 }
 async function findCustomer({ cpfCnpj, email }) {
   const params = {};
-  if (cpfCnpj) params.cpfCnpj = cpfCnpj.replace(/\D/g, "");
+  if (cpfCnpj) params.cpfCnpj = onlyDigits(cpfCnpj);
   if (email) params.email = email.trim().toLowerCase();
   const { data } = await asaas.get("/customers", { params });
   return data?.data?.[0] || null;
@@ -344,6 +521,8 @@ async function buildSecondCopyMessage(customerId) {
   out.push("\nTambém enviamos a *segunda via* como mensagem estruturada. Se precisar de ajuda, responda com *4* para atendente.");
   return out.join("\n");
 }
+
+// ======== Comprovante (email/webhook) ========
 async function iniciarComprovante(to) {
   await sendText(to,
 `📎 *Enviar comprovante de pagamento*
@@ -389,25 +568,19 @@ async function postarComprovanteWebhook(url, payload) {
    Handoff humano + Feedback
    ======================= */
 
-// inicia atendimento humano (não mostrar menu; só aceitar 'encerra' ou 'não')
 async function handoff(to) {
   setStep(to, "human_handoff");
   await sendText(to,
 "👩‍💼 Ok! Vou transferir para um atendente humano.\nEnquanto isso, posso não responder.\n\nPara *encerrar* a conversa a qualquer momento, digite *encerra*.");
 }
-
-// inicia formulário de feedback
 async function startFeedback(to) {
   setStep(to, "feedback_ask");
-  await sendText(to,
-"📝 *Avalie nosso atendimento*\nDe *1 a 5*, como você nos avalia?\n(1 = péssimo, 5 = excelente)");
+  await sendText(to, "📝 *Avalie nosso atendimento*\nDe *1 a 5*, como você nos avalia?\n(1 = péssimo, 5 = excelente)");
 }
-
 async function finishFeedback(to) {
   await sendText(to, "✅ Obrigado pelo feedback!\n*Atendimento finalizado.* Quando quiser recomeçar, envie *qualquer mensagem* e eu mostro o menu.");
   setStep(to, "ended_wait_any");
 }
-
 async function boasVindas(to, nomeGuess) {
   await sendText(to,
 `Olá${nomeGuess ? `, ${nomeGuess}` : ""}! 👋 Sou o assistente virtual da *${COMPANY_NAME}*.
@@ -422,7 +595,9 @@ ${menuPrincipal()}
 Digite *menu* a qualquer momento.`);
 }
 
-// ======== WEBHOOKS ========
+/* ===========================
+   META WEBHOOK (verificação/recebimento)
+   =========================== */
 
 // Verificação do webhook (Meta) - GET
 app.get("/webhook", (req, res) => {
@@ -439,66 +614,56 @@ app.get("/webhook", (req, res) => {
 // Recebimento de mensagens - POST
 app.post("/webhook", async (req, res) => {
   try {
-    // responde rápido para a Meta
-    res.sendStatus(200);
+    res.sendStatus(200); // responde rápido
 
     const change = req.body.entry?.[0]?.changes?.[0];
     const value  = change?.value || {};
-    const msg    = value.messages?.[0];            // mensagem do usuário
-    const waId   = value.contacts?.[0]?.wa_id;     // wa_id do contato
+    const msg    = value.messages?.[0];
+    const waId   = value.contacts?.[0]?.wa_id;
 
-    if (!msg) return; // ignora entregas/status sem mensagem do usuário
+    if (!msg) return;
 
-    // DESTINATÁRIO: quem enviou (só dígitos)
-    const to = String(msg.from || waId || "").replace(/\D/g, "");
-    console.log(">> Enviando resposta para:", to);
+    const to = onlyDigits(msg.from || waId);
+    const type = msg.type;
+    const profileName = value.contacts?.[0]?.profile?.name || "";
 
-    // texto recebido
-    const rawText = msg.type === "text" ? (msg.text.body || "") : "";
+    const rawText = type === "text" ? (msg.text?.body || "") : "";
     const text = rawText.trim().toLowerCase();
-    const profileName = value.contacts?.[0]?.profile?.name;
 
     const chamaMenu = ["oi","olá","ola","bom dia","boa tarde","boa noite","menu","iniciar","start"];
     const step = getStep(to);
 
-    /* --------- ESTADOS DE HANDOFF/FEEDBACK ---------- */
+    // Quick reply do template de atraso
+    if (type === "button" && msg?.button?.payload === "AJUDA_COBRANCA") {
+      await handoff(to);
+      return;
+    }
 
-    // 1) Durante o atendimento humano
+    /* --------- ESTADOS DE HANDOFF/FEEDBACK ---------- */
     if (step === "human_handoff") {
-      // encerra conversa manualmente
       if (/(^|\b)(encerra|encerrar|finalizar|fim)(\b|$)/i.test(text)) {
-        await endChat(to); // finaliza e entra em ended_wait_any
+        await endChat(to);
         return;
       }
-      // se o cliente responder "não" (após a pergunta do atendente), abre feedback
       if (text === "não" || text === "nao" || text === "n") {
         await startFeedback(to);
         return;
       }
-      // caso contrário: SILÊNCIO (não mandar menu nem nada)
-      return;
+      return; // silêncio durante o handoff
     }
-
-    // 2) Coleta da nota 1–5
     if (step === "feedback_ask") {
       const m = text.match(/^[1-5]$/);
-      if (!m) {
-        await sendText(to, "Por favor, responda com um número de *1 a 5* (1 = péssimo, 5 = excelente).");
-        return;
-      }
+      if (!m) { await sendText(to, "Por favor, responda com um número de *1 a 5* (1 = péssimo, 5 = excelente)."); return; }
       const nota = Number(m[0]);
       sessions[to] = { ...(sessions[to]||{}), fbScore: nota };
       setStep(to, "feedback_comment");
       await sendText(to, "Obrigado! Quer deixar algum comentário? (se não quiser, responda *pular*)");
       return;
     }
-
-    // 3) Comentário (opcional) e finalização
     if (step === "feedback_comment") {
       const comentario = text;
       if (comentario !== "pular") {
         const nota = sessions[to]?.fbScore;
-        // Aqui você pode enviar para e-mail/planilha/CRM
         console.log("Feedback recebido:", { to, nota, comentario });
       } else {
         console.log("Feedback sem comentário:", { to, nota: sessions[to]?.fbScore });
@@ -506,17 +671,15 @@ app.post("/webhook", async (req, res) => {
       await finishFeedback(to);
       return;
     }
-
-    // 4) Após finalizado: qualquer mensagem mostra o menu de novo
     if (step === "ended_wait_any") {
       clearStep(to);
       await boasVindas(to, profileName);
       return;
     }
 
-    /* ------------- SUBMENUS PADRÃO ------------- */
+    /* ------------- SUBMENUS ------------- */
 
-    // ======= PLANOS: tratar submenu =======
+    // PLANOS
     if (step === "planos_menu") {
       if (text === "9")  { clearStep(to); await boasVindas(to, profileName); return; }
       if (text === "10") { clearStep(to); await handoff(to); return; }
@@ -531,7 +694,7 @@ app.post("/webhook", async (req, res) => {
       await planosProcessarFormulario(to, rawText); return;
     }
 
-    // ======= SUPORTE: menu principal do suporte =======
+    // SUPORTE
     if (step === "suporte_menu") {
       if (text === "1" || text.includes("acessar")) { await suporteAcessoApp(to); return; }
       if (text === "2" || text.includes("offline") || text.includes("off-line")) { await suporteVeiculoOffline(to); return; }
@@ -549,7 +712,7 @@ app.post("/webhook", async (req, res) => {
       await suporteEsqueciAcessoProcessar(to, rawText); return;
     }
 
-    // ======= FINANCEIRO =======
+    // FINANCEIRO
     if (step === "financeiro_menu") {
       if (text === "1" || text.includes("segunda via")) { await iniciarSegundaVia(to); return; }
       if (text === "2" || text.includes("comprovante")) { await iniciarComprovante(to); return; }
@@ -562,8 +725,8 @@ app.post("/webhook", async (req, res) => {
     }
     if (step === "financeiro_segundavia") {
       if (asaas) {
-        const onlyDigits = rawText.replace(/\D/g, "");
-        const isCPFouCNPJ = onlyDigits.length >= 11 && onlyDigits.length <= 14;
+        const onlyDigitsText = rawText.replace(/\D/g, "");
+        const isCPFouCNPJ = onlyDigitsText.length >= 11 && onlyDigitsText.length <= 14;
         const isEmail = rawText.includes("@") && rawText.includes(".");
         if (!isCPFouCNPJ && !isEmail) { await sendText(to, "Por favor, informe *CPF/CNPJ* (11–14 dígitos) ou *e-mail* válido."); return; }
         try {
@@ -685,5 +848,120 @@ Data: ${new Date().toLocaleString("pt-BR")}`;
   }
 });
 
-// porta
+/* ===========================================
+   ENDPOINTS AUXILIARES P/ COBRANÇAS (ASAAS)
+   =========================================== */
+
+// Criar cobrança e enviar template de nova cobrança
+// POST /criar-cobranca
+// { "to":"5599XXXXXXXX", "nome":"João", "descricao":"Mensalidade", "valor":49.9, "vencimento":"2025-09-10", "billingType":"BOLETO", "cpfCnpj":"000.000.000-00", "email":"cliente@exemplo.com" }
+app.post("/criar-cobranca", async (req, res) => {
+  try {
+    const { to, nome, descricao, valor, vencimento, billingType, cpfCnpj, email } = req.body || {};
+    if (!to || !valor || !vencimento) return res.status(400).json({ ok:false, error:"to, valor, vencimento são obrigatórios" });
+    if (!asaas) return res.status(400).json({ ok:false, error:"Asaas não configurado (ASAAS_API_KEY)" });
+
+    const customer = await ensureAsaasCustomer({
+      name: nome || "Cliente",
+      email,
+      cpfCnpj,
+      mobilePhone: to
+    });
+
+    const { payment, link } = await createPaymentAndLink({
+      customerId: customer.id,
+      value: valor,
+      dueDate: vencimento,
+      billingType: billingType || "BOLETO",
+      description: descricao || "Cobrança",
+      externalReference: onlyDigits(to)
+    });
+
+    await sendTemplateCobrancaNova(to, {
+      nome: customer.name || nome || "Cliente",
+      descricao: descricao || "Cobrança",
+      valorBR: brl(valor),
+      vencimentoBR: dataBR(vencimento),
+      link: link || ""
+    });
+
+    return res.json({ ok:true, paymentId: payment.id, link });
+  } catch (e) {
+    console.error("Erro /criar-cobranca:", e?.response?.data || e);
+    return res.status(500).json({ ok:false, error: e?.message || "erro" });
+  }
+});
+
+// Webhook do Asaas — venceu, pagou etc.
+// Configure no Asaas: https://SEU-APP.onrender.com/webhook/asaas?token=SEU_TOKEN
+app.post("/webhook/asaas", async (req, res) => {
+  try {
+    const token = req.query.token || "";
+    if (!ASAAS_WEBHOOK_TOKEN || token !== ASAAS_WEBHOOK_TOKEN) {
+      return res.sendStatus(403);
+    }
+    res.sendStatus(200); // confirma rápido ao Asaas
+
+    const event = req.body?.event || req.body?.type || "";
+    const p = req.body?.payment || req.body?.data?.payment || req.body?.data || {};
+    if (!p) return;
+
+    const status = p.status || ""; // PENDING, OVERDUE, RECEIVED, CONFIRMED...
+    const customerId = p.customer || "";
+    const nome = p.customer?.name || "Cliente";
+    const descricao = p.description || "Cobrança";
+    const valorBR = typeof p.value === "number" ? brl(p.value) : String(p.value || "");
+    const vencimentoBR = p.dueDate ? dataBR(p.dueDate) : "";
+    const link = p.invoiceUrl || p.bankSlipUrl || "";
+
+    // tentar número do WhatsApp salvo no externalReference
+    let to = onlyDigits(p.externalReference || "");
+    // fallback: buscar telefone do customer
+    if (!to && asaas && customerId) {
+      try {
+        const { data: cust } = await asaas.get(`/customers/${customerId}`);
+        let phone = cust?.mobilePhone || cust?.phone || "";
+        phone = onlyDigits(phone);
+        if (phone && phone.length === 11) phone = "55" + phone;
+        to = phone;
+      } catch (e) { console.error("Asaas get customer fail:", e?.response?.data || e); }
+    }
+    if (!to) { console.log("Sem telefone para notificar."); return; }
+
+    // Extrai código curto do Asaas (para botões de URL)
+    const linkCode = extractAsaasCodeFromUrl(link);
+
+    // Atraso
+    if (/OVERDUE/i.test(status)) {
+      if (linkCode) {
+        await sendTemplateCobrancaAtraso(to, { nome, descricao, valorBR, vencimentoBR, linkCode });
+      } else {
+        // Sem código; envia versão "nova" com link no corpo
+        await sendTemplateCobrancaNova(to, { nome, descricao, valorBR, vencimentoBR, link });
+      }
+      return;
+    }
+
+    // Criado (opcional reenvio)
+    if (/CREATED/i.test(event)) {
+      if (link) {
+        await sendTemplateCobrancaNova(to, { nome, descricao, valorBR, vencimentoBR, link });
+      }
+      return;
+    }
+
+    // Recebido/Confirmado (pagamento ok)
+    if (/RECEIVED|CONFIRMED/i.test(status)) {
+      const dataPagamentoBR = new Date().toLocaleDateString("pt-BR");
+      await sendTemplatePagamentoConfirmado(to, { nome, descricao, valorBR, dataPagamentoBR });
+      return;
+    }
+  } catch (e) {
+    console.error("Erro /webhook/asaas:", e?.response?.data || e);
+  }
+});
+
+/* ======================
+   SERVIDOR
+   ====================== */
 app.listen(process.env.PORT || 3000, () => console.log("Bot online"));

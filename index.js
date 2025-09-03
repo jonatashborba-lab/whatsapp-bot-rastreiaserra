@@ -2,14 +2,20 @@
 const express = require("express");
 const axios = require("axios");
 const nodemailer = require("nodemailer");
+const crypto = require("crypto");
 
 const app = express();
-app.use(express.json());
+
+// Para validar assinatura do Meta (opcional) precisamos do raw body
+app.use(express.json({
+  verify: (req, res, buf) => { req.rawBody = buf; }
+}));
 
 // ========================
 // Config & Variáveis de Ambiente
 // ========================
 const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION || "v20.0";
+const APP_SECRET = process.env.APP_SECRET || ""; // opcional (assinatura Meta)
 
 const {
   VERIFY_TOKEN,
@@ -44,7 +50,7 @@ const PORT = Number(PORT_STR);
 // Dados fixos da empresa
 // ========================
 const COMPANY_NAME    = "RASTREIA SERRA RASTREAMENTO VEICULAR";
-const COMPANY_ADDRESS = "Rua Maestro João Cosner, 376 – Cidade Nova – Caxias do Sul/RS";
+const COMPANY_ADDRESS = "Rua Maestro João Cosner, 435 – Cidade Nova – Caxias do Sul/RS"; // corrigido
 const PAYMENT_METHODS = "Cartão de crédito/débito, Pix, boleto e dinheiro";
 const SUPPORT_WHATS   = "54 98401-1516";
 const SUPPORT_EMAIL   = "rastreiaserra@outlook.com";
@@ -93,27 +99,67 @@ function extractAsaasCodeFromUrl(url) {
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ========================
-// Envio WhatsApp (Cloud API)
+// Verificação de assinatura (Meta) — opcional
 // ========================
+function verifyMetaSignature(req) {
+  if (!APP_SECRET) return true; // se não configurar, não bloqueia
+  const sig = req.get("X-Hub-Signature-256");
+  if (!sig) return false;
+  const hmac = crypto.createHmac("sha256", APP_SECRET);
+  hmac.update(req.rawBody || Buffer.from(""));
+  const expected = `sha256=${hmac.digest("hex")}`;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
+// ========================
+// Envio WhatsApp (Cloud API) com retry/backoff
+// ========================
+async function postToWhats(path, payload) {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${path}`;
+  let attempt = 0, lastErr;
+  while (attempt < 3) {
+    try {
+      return await axios.post(url, payload, {
+        headers: { Authorization: `Bearer ${WHATS_TOKEN}` },
+        timeout: 15000
+      });
+    } catch (e) {
+      lastErr = e?.response?.data || e?.message || e;
+      const status = e?.response?.status;
+      if (status === 429 || (status >= 500 && status < 600)) {
+        await delay(400 * (attempt + 1));
+        attempt++;
+        continue;
+      }
+      break;
+    }
+  }
+  console.error("WhatsApp API fail:", lastErr);
+  throw lastErr;
+}
+
 async function sendText(to, text) {
   to = onlyDigits(to);
   if (!to) return;
   try {
-    await axios.post(
-      `https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`,
-      { messaging_product: "whatsapp", to, type: "text", text: { body: text } },
-      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } }
-    );
-  } catch (e) {
-    console.error("sendText fail:", e?.response?.data || e?.message || e);
-  }
+    await postToWhats(`${PHONE_NUMBER_ID}/messages`, {
+      messaging_product: "whatsapp",
+      to,
+      type: "text",
+      text: { body: text }
+    });
+  } catch {}
 }
 
 // 1) Cobrança nova (link no corpo) — template: cobranca_nova_v2
 async function sendTemplateCobrancaNova(to, { nome, descricao, valorBR, vencimentoBR, link }) {
   try {
     to = onlyDigits(to);
-    const payload = {
+    await postToWhats(`${PHONE_NUMBER_ID}/messages`, {
       messaging_product: "whatsapp",
       to,
       type: "template",
@@ -131,19 +177,15 @@ async function sendTemplateCobrancaNova(to, { nome, descricao, valorBR, vencimen
           ]
         }]
       }
-    };
-    await axios.post(`https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`, payload,
-      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
-  } catch (e) {
-    console.error("sendTemplateCobrancaNova fail:", e?.response?.data || e?.message || e);
-  }
+    });
+  } catch {}
 }
 
 // 2) Lembrete de vencimento — template: lembrete_vencimento_v1 (botão URL com sufixo {{1}})
 async function sendTemplateLembreteVencimento(to, { nome, descricao, valorBR, vencimentoBR, linkCode }) {
   try {
     to = onlyDigits(to);
-    const payload = {
+    await postToWhats(`${PHONE_NUMBER_ID}/messages`, {
       messaging_product: "whatsapp",
       to,
       type: "template",
@@ -168,19 +210,15 @@ async function sendTemplateLembreteVencimento(to, { nome, descricao, valorBR, ve
           }
         ]
       }
-    };
-    await axios.post(`https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`, payload,
-      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
-  } catch (e) {
-    console.error("sendTemplateLembreteVencimento fail:", e?.response?.data || e?.message || e);
-  }
+    });
+  } catch {}
 }
 
-// 3) Cobrança em atraso — template: cobranca_atraso_v1 (URL button dinâmico; quick_reply sem parâmetros no payload!)
+// 3) Cobrança em atraso — template: cobranca_atraso_v1 (URL button dinâmico)
 async function sendTemplateCobrancaAtraso(to, { nome, descricao, valorBR, vencimentoBR, linkCode }) {
   try {
     to = onlyDigits(to);
-    const payload = {
+    await postToWhats(`${PHONE_NUMBER_ID}/messages`, {
       messaging_product: "whatsapp",
       to,
       type: "template",
@@ -197,7 +235,6 @@ async function sendTemplateCobrancaAtraso(to, { nome, descricao, valorBR, vencim
               { type: "text", text: vencimentoBR || "" }       // {{4}}
             ]
           },
-          // URL button dinâmico (permitido); NÃO incluir quick_reply aqui com parameters
           {
             type: "button",
             sub_type: "url",
@@ -206,19 +243,15 @@ async function sendTemplateCobrancaAtraso(to, { nome, descricao, valorBR, vencim
           }
         ]
       }
-    };
-    await axios.post(`https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`, payload,
-      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
-  } catch (e) {
-    console.error("sendTemplateCobrancaAtraso fail:", e?.response?.data || e?.message || e);
-  }
+    });
+  } catch {}
 }
 
 // 4) Pagamento confirmado — template: pagamento_confirmado_v1
 async function sendTemplatePagamentoConfirmado(to, { nome, descricao, valorBR, dataPagamentoBR }) {
   try {
     to = onlyDigits(to);
-    const payload = {
+    await postToWhats(`${PHONE_NUMBER_ID}/messages`, {
       messaging_product: "whatsapp",
       to,
       type: "template",
@@ -235,19 +268,15 @@ async function sendTemplatePagamentoConfirmado(to, { nome, descricao, valorBR, d
           ]
         }]
       }
-    };
-    await axios.post(`https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`, payload,
-      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
-  } catch (e) {
-    console.error("sendTemplatePagamentoConfirmado fail:", e?.response?.data || e?.message || e);
-  }
+    });
+  } catch {}
 }
 
 // (extra) Segunda via — template: segunda_via_fatura
 async function sendTemplateSegundaVia(to, { nome, faturaId, vencimentoBR, valorBR, url }) {
   try {
     to = onlyDigits(to);
-    const payload = {
+    await postToWhats(`${PHONE_NUMBER_ID}/messages`, {
       messaging_product: "whatsapp",
       to,
       type: "template",
@@ -265,12 +294,8 @@ async function sendTemplateSegundaVia(to, { nome, faturaId, vencimentoBR, valorB
           ]
         }]
       }
-    };
-    await axios.post(`https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`, payload,
-      { headers: { Authorization: `Bearer ${WHATS_TOKEN}` } });
-  } catch (e) {
-    console.error("sendTemplateSegundaVia fail:", e?.response?.data || e?.message || e);
-  }
+    });
+  } catch {}
 }
 
 /* ===========================================
@@ -652,6 +677,8 @@ app.get("/webhook", (req, res) => {
 // Recebimento de mensagens - POST
 app.post("/webhook", async (req, res) => {
   try {
+    if (!verifyMetaSignature(req)) { return res.sendStatus(403); }
+
     res.sendStatus(200); // responde rápido
 
     const change = req.body.entry?.[0]?.changes?.[0];
@@ -671,7 +698,7 @@ app.post("/webhook", async (req, res) => {
     const chamaMenu = ["oi","olá","ola","bom dia","boa tarde","boa noite","menu","iniciar","start"];
     const step = getStep(to);
 
-    // Quick reply vindo de template (type=button) OU interactive (button_reply.id)
+    // Quick reply/interactive pedindo ajuda
     if (
       (type === "button" && /ajuda|atendente/i.test(msg?.button?.text || "")) ||
       (type === "interactive" && msg?.interactive?.button_reply?.id === "AJUDA_COBRANCA")
@@ -948,6 +975,8 @@ app.post("/webhook/asaas", async (req, res) => {
 
     const event = req.body?.event || req.body?.type || "";
     const p = req.body?.payment || req.body?.data?.payment || req.body?.data || {};
+    console.log("Asaas webhook:", { event, status: p?.status, id: p?.id });
+
     if (!p) return;
 
     const status = p.status || ""; // PENDING, OVERDUE, RECEIVED, CONFIRMED...
@@ -991,7 +1020,6 @@ app.post("/webhook/asaas", async (req, res) => {
       if (linkCode) {
         await sendTemplateCobrancaAtraso(to, { nome, descricao, valorBR, vencimentoBR, linkCode });
       } else {
-        // Sem código; envia versão "nova" com link no corpo
         await sendTemplateCobrancaNova(to, { nome, descricao, valorBR, vencimentoBR, link });
       }
       return;
@@ -1015,6 +1043,7 @@ app.post("/webhook/asaas", async (req, res) => {
     console.error("Erro /webhook/asaas:", e?.response?.data || e);
   }
 });
+
 // ===== Páginas de compliance (LGPD) =====
 const LAST_UPDATE = new Date().toLocaleDateString("pt-BR");
 
@@ -1074,6 +1103,7 @@ app.head("/exclusao-de-dados", (req, res) => res.sendStatus(200));
 app.get("/", (req, res) => {
   res.type("text/plain").send("RastreiaSerra Bot online");
 });
-// (já tem) healthcheck
+// healthcheck
 app.get("/health", (req, res) => res.status(200).send("ok"));
+
 app.listen(PORT, () => console.log(`Bot online na porta ${PORT}`));
